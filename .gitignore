@@ -1,0 +1,12 @@
+!**/.gitkeep
+
+tmp/
+dist/
+.DS_Store
+
+.local/
+.env
+
+cognito-hooks-go
+main
+

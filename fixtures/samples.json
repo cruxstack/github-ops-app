@@ -1,0 +1,75 @@
+[
+  {
+    "event_type": "okta_sync",
+    "description": "Scheduled Okta group sync"
+  },
+  {
+    "event_type": "pr_webhook",
+    "description": "PR merged with bypass",
+    "payload": {
+      "action": "closed",
+      "number": 123,
+      "pull_request": {
+        "id": 1,
+        "number": 123,
+        "state": "closed",
+        "locked": false,
+        "title": "Emergency hotfix for production bug",
+        "user": {
+          "login": "developer",
+          "id": 1,
+          "type": "User"
+        },
+        "body": "Critical fix needed immediately",
+        "created_at": "2025-11-22T10:00:00Z",
+        "updated_at": "2025-11-22T10:30:00Z",
+        "closed_at": "2025-11-22T10:30:00Z",
+        "merged_at": "2025-11-22T10:30:00Z",
+        "merge_commit_sha": "abc123def456",
+        "merged": true,
+        "merged_by": {
+          "login": "admin-user",
+          "id": 2,
+          "type": "User"
+        },
+        "head": {
+          "label": "cruxstack:hotfix",
+          "ref": "hotfix",
+          "sha": "abc123",
+          "user": {
+            "login": "developer",
+            "id": 1
+          }
+        },
+        "base": {
+          "label": "cruxstack:main",
+          "ref": "main",
+          "sha": "def456",
+          "user": {
+            "login": "cruxstack",
+            "id": 100
+          }
+        },
+        "html_url": "https://github.com/cruxstack/api-service/pull/123"
+      },
+      "repository": {
+        "id": 1000,
+        "name": "api-service",
+        "full_name": "cruxstack/api-service",
+        "owner": {
+          "login": "cruxstack",
+          "id": 100,
+          "type": "Organization"
+        },
+        "private": false,
+        "html_url": "https://github.com/cruxstack/api-service",
+        "description": "API service repository"
+      },
+      "sender": {
+        "login": "admin-user",
+        "id": 2,
+        "type": "User"
+      }
+    }
+  }
+]
