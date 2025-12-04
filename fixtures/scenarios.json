@@ -1,0 +1,1052 @@
+[
+  {
+    "name": "okta_sync_single_team",
+    "description": "Test Okta sync with one team and one user",
+    "event_type": "scheduled_event",
+    "event_payload": {
+      "action": "okta-sync"
+    },
+    "expected_calls": [
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/*/teams/*"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering",
+        "status_code": 200,
+        "body": "{\"id\":1,\"name\":\"Engineering\",\"slug\":\"engineering\",\"description\":\"Engineering team\"}",
+        "description": "fetch engineering team details"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering/members",
+        "status_code": 200,
+        "body": "[]",
+        "description": "engineering team has no existing members"
+      },
+      {
+        "service": "github",
+        "method": "PUT",
+        "path": "/orgs/acme-ghorg/teams/engineering/memberships/*",
+        "status_code": 200,
+        "body": "{\"state\":\"active\",\"role\":\"member\"}",
+        "description": "add user to engineering team"
+      },
+      {
+        "service": "okta",
+        "method": "POST",
+        "path": "/oauth2/v1/token",
+        "status_code": 200,
+        "body": "{\"token_type\":\"Bearer\",\"expires_in\":3600,\"access_token\":\"mock-access-token\",\"scope\":\"okta.groups.read okta.users.read\"}",
+        "description": "okta oauth 2.0 token authentication"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups",
+        "status_code": 200,
+        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "description": "fetch all okta groups (returns engineering group)"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups/00g1234567890abcdef/users",
+        "status_code": 200,
+        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}}]",
+        "description": "fetch users in engineering group (returns alice-gh)"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "status_code": 200,
+        "body": "{\"ok\":true,\"channel\":\"C01234TEST\",\"ts\":\"1234567890.123456\"}",
+        "description": "send sync report notification to slack"
+      }
+    ]
+  },
+  {
+    "name": "pr_webhook_with_bypass",
+    "description": "Detect when PR is merged bypassing branch protection and send Slack notification",
+    "event_type": "webhook",
+    "webhook_type": "pull_request",
+    "webhook_payload": {
+      "action": "closed",
+      "number": 456,
+      "pull_request": {
+        "id": 456,
+        "number": 456,
+        "state": "closed",
+        "locked": false,
+        "merged": true,
+        "merged_at": "2025-11-22T10:30:00Z",
+        "merged_by": {
+          "login": "admin-user",
+          "id": 2,
+          "type": "User"
+        },
+        "head": {
+          "label": "acme-ghorg:feature-branch",
+          "ref": "feature-branch",
+          "sha": "abc123def456"
+        },
+        "base": {
+          "label": "acme-ghorg:main",
+          "ref": "main",
+          "sha": "def456abc123"
+        },
+        "html_url": "https://github.com/acme-ghorg/fake-app-repo/pull/456"
+      },
+      "repository": {
+        "id": 1000,
+        "name": "fake-app-repo",
+        "full_name": "acme-ghorg/fake-app-repo",
+        "owner": {
+          "login": "acme-ghorg",
+          "id": 100,
+          "type": "Organization"
+        },
+        "private": false
+      },
+      "sender": {
+        "login": "admin-user",
+        "id": 2,
+        "type": "User"
+      }
+    },
+    "expected_calls": [
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/pulls/456"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/branches/main/protection"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/pulls/456/reviews"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/collaborators/admin-user/permission"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/pulls/456",
+        "status_code": 200,
+        "body": "{\"number\":456,\"state\":\"closed\",\"merged\":true,\"merged_at\":\"2025-11-22T10:30:00Z\",\"merged_by\":{\"login\":\"admin-user\"},\"base\":{\"ref\":\"main\"}}",
+        "description": "fetch pr #456 details (merged by admin-user)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/branches/main/protection",
+        "status_code": 200,
+        "body": "{\"required_pull_request_reviews\":{\"required_approving_review_count\":2,\"dismiss_stale_reviews\":true},\"enforce_admins\":{\"enabled\":true}}",
+        "description": "fetch branch protection rules (requires 2 approvals, enforce for admins)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/pulls/456/reviews",
+        "status_code": 200,
+        "body": "[{\"id\":1,\"user\":{\"login\":\"reviewer1\"},\"state\":\"APPROVED\"}]",
+        "description": "fetch pr reviews (only 1 approval, insufficient)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/collaborators/admin-user/permission",
+        "status_code": 200,
+        "body": "{\"permission\":\"admin\",\"user\":{\"login\":\"admin-user\"}}",
+        "description": "check merger permissions (admin-user has admin permission)"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "status_code": 200,
+        "body": "{\"ok\":true,\"channel\":\"C01234TEST\",\"ts\":\"1234567890.123456\"}",
+        "description": "send bypass alert notification to slack"
+      }
+    ]
+  },
+  {
+    "name": "pr_webhook_compliant",
+    "description": "PR merged with proper approvals - no bypass",
+    "event_type": "webhook",
+    "webhook_type": "pull_request",
+    "webhook_payload": {
+      "action": "closed",
+      "number": 789,
+      "pull_request": {
+        "id": 789,
+        "number": 789,
+        "state": "closed",
+        "merged": true,
+        "merged_at": "2025-11-22T11:00:00Z",
+        "merged_by": {
+          "login": "developer",
+          "id": 3,
+          "type": "User"
+        },
+        "head": {
+          "ref": "bugfix",
+          "sha": "xyz789"
+        },
+        "base": {
+          "ref": "main",
+          "sha": "abc456"
+        },
+        "html_url": "https://github.com/acme-ghorg/fake-app-repo/pull/789"
+      },
+      "repository": {
+        "name": "fake-app-repo",
+        "full_name": "acme-ghorg/fake-app-repo",
+        "owner": {
+          "login": "acme-ghorg"
+        }
+      }
+    },
+    "expected_calls": [
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/pulls/789"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/branches/main/protection"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/pulls/789/reviews"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/pulls/789",
+        "status_code": 200,
+        "body": "{\"number\":789,\"state\":\"closed\",\"merged\":true,\"base\":{\"ref\":\"main\"}}",
+        "description": "fetch pr #789 details (merged)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/branches/main/protection",
+        "status_code": 200,
+        "body": "{\"required_pull_request_reviews\":{\"required_approving_review_count\":2}}",
+        "description": "fetch branch protection rules (requires 2 approvals)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/pulls/789/reviews",
+        "status_code": 200,
+        "body": "[{\"state\":\"APPROVED\",\"user\":{\"login\":\"reviewer1\"}},{\"state\":\"APPROVED\",\"user\":{\"login\":\"reviewer2\"}}]",
+        "description": "fetch pr reviews (2 approvals, meets requirements)"
+      }
+    ]
+  },
+  {
+    "name": "okta_sync_inactive_users",
+    "description": "Test that inactive Okta users are excluded from sync",
+    "event_type": "scheduled_event",
+    "event_payload": {
+      "action": "okta-sync"
+    },
+    "expected_calls": [
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/*/teams/*"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering",
+        "status_code": 200,
+        "body": "{\"id\":1,\"name\":\"Engineering\",\"slug\":\"engineering\",\"description\":\"Engineering team\"}",
+        "description": "fetch engineering team details"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering/members",
+        "status_code": 200,
+        "body": "[{\"login\":\"inactive-user\"},{\"login\":\"suspended-user\"}]",
+        "description": "fetch current team members (inactive-user, suspended-user)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/members/inactive-user/memberships/orgs/acme-ghorg",
+        "status_code": 200,
+        "body": "{\"state\":\"active\",\"role\":\"member\"}",
+        "description": "check inactive-user org membership"
+      },
+      {
+        "service": "github",
+        "method": "DELETE",
+        "path": "/orgs/acme-ghorg/teams/engineering/memberships/inactive-user",
+        "status_code": 204,
+        "body": "",
+        "description": "remove inactive-user from team (deprovisioned in okta)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/members/suspended-user/memberships/orgs/acme-ghorg",
+        "status_code": 200,
+        "body": "{\"state\":\"active\",\"role\":\"member\"}",
+        "description": "check suspended-user org membership"
+      },
+      {
+        "service": "github",
+        "method": "DELETE",
+        "path": "/orgs/acme-ghorg/teams/engineering/memberships/suspended-user",
+        "status_code": 204,
+        "body": "",
+        "description": "remove suspended-user from team (suspended in okta)"
+      },
+      {
+        "service": "github",
+        "method": "PUT",
+        "path": "/orgs/acme-ghorg/teams/engineering/memberships/alice-gh",
+        "status_code": 200,
+        "body": "{\"state\":\"active\",\"role\":\"member\"}",
+        "description": "add alice-gh to team (active in okta)"
+      },
+      {
+        "service": "okta",
+        "method": "POST",
+        "path": "/oauth2/v1/token",
+        "status_code": 200,
+        "body": "{\"token_type\":\"Bearer\",\"expires_in\":3600,\"access_token\":\"mock-access-token\",\"scope\":\"okta.groups.read okta.users.read\"}",
+        "description": "okta oauth 2.0 token authentication"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups",
+        "status_code": 200,
+        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "description": "fetch all okta groups (returns engineering group)"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups/00g1234567890abcdef/users",
+        "status_code": 200,
+        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}},{\"id\":\"00u2222222222222222\",\"status\":\"SUSPENDED\",\"profile\":{\"email\":\"suspended@example.com\",\"githubUsername\":\"suspended-user\"}},{\"id\":\"00u3333333333333333\",\"status\":\"DEPROVISIONED\",\"profile\":{\"email\":\"inactive@example.com\",\"githubUsername\":\"inactive-user\"}}]",
+        "description": "fetch users in engineering group (active, suspended, deprovisioned statuses)"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "status_code": 200,
+        "body": "{\"ok\":true,\"channel\":\"C01234TEST\",\"ts\":\"1234567890.123456\"}",
+        "description": "send sync report notification to slack"
+      }
+    ]
+  },
+  {
+    "name": "okta_sync_external_collaborators",
+    "description": "Test that external collaborators are not removed from teams",
+    "event_type": "scheduled_event",
+    "event_payload": {
+      "action": "okta-sync"
+    },
+    "expected_calls": [
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/*/teams/*"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/memberships/external-contractor"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering",
+        "status_code": 200,
+        "body": "{\"id\":1,\"name\":\"Engineering\",\"slug\":\"engineering\",\"description\":\"Engineering team\"}",
+        "description": "fetch engineering team details"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering/members",
+        "status_code": 200,
+        "body": "[{\"login\":\"alice-gh\"},{\"login\":\"external-contractor\"}]",
+        "description": "fetch current team members (alice-gh, external-contractor)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/memberships/external-contractor",
+        "status_code": 404,
+        "body": "{\"message\":\"Not Found\"}",
+        "description": "check external-contractor org membership (not an org member)"
+      },
+      {
+        "service": "okta",
+        "method": "POST",
+        "path": "/oauth2/v1/token",
+        "status_code": 200,
+        "body": "{\"token_type\":\"Bearer\",\"expires_in\":3600,\"access_token\":\"mock-access-token\",\"scope\":\"okta.groups.read okta.users.read\"}",
+        "description": "okta oauth 2.0 token authentication"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups",
+        "status_code": 200,
+        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "description": "fetch all okta groups (returns engineering group)"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups/00g1234567890abcdef/users",
+        "status_code": 200,
+        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}}]",
+        "description": "fetch users in engineering group (only alice-gh)"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "status_code": 200,
+        "body": "{\"ok\":true,\"channel\":\"C01234TEST\",\"ts\":\"1234567890.123456\"}",
+        "description": "send sync report notification to slack"
+      }
+    ]
+  },
+  {
+    "name": "okta_sync_safety_threshold",
+    "description": "Test that safety threshold prevents mass removal during outages",
+    "event_type": "scheduled_event",
+    "event_payload": {
+      "action": "okta-sync"
+    },
+    "expected_calls": [
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/*/teams/*"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering",
+        "status_code": 200,
+        "body": "{\"id\":1,\"name\":\"Engineering\",\"slug\":\"engineering\",\"description\":\"Engineering team\"}",
+        "description": "fetch engineering team details"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering/members",
+        "status_code": 200,
+        "body": "[{\"login\":\"user1\"},{\"login\":\"user2\"},{\"login\":\"user3\"},{\"login\":\"user4\"},{\"login\":\"user5\"}]",
+        "description": "fetch current team members (5 users)"
+      },
+      {
+        "service": "okta",
+        "method": "POST",
+        "path": "/oauth2/v1/token",
+        "status_code": 200,
+        "body": "{\"token_type\":\"Bearer\",\"expires_in\":3600,\"access_token\":\"mock-access-token\",\"scope\":\"okta.groups.read okta.users.read\"}",
+        "description": "okta oauth 2.0 token authentication"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups",
+        "status_code": 200,
+        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "description": "fetch all okta groups (returns engineering group)"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups/00g1234567890abcdef/users",
+        "status_code": 200,
+        "body": "[]",
+        "description": "fetch users in engineering group (empty - potential outage)"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "status_code": 200,
+        "body": "{\"ok\":true,\"channel\":\"C01234TEST\",\"ts\":\"1234567890.123456\"}",
+        "description": "send safety threshold alert to slack (5 removals blocked)"
+      }
+    ]
+  },
+  {
+    "name": "okta_sync_api_error_no_removal",
+    "description": "Test that users are not removed when Okta API returns error fetching group members",
+    "event_type": "scheduled_event",
+    "event_payload": {
+      "action": "okta-sync"
+    },
+    "expect_error": true,
+    "expected_calls": [
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "okta",
+        "method": "POST",
+        "path": "/oauth2/v1/token",
+        "status_code": 200,
+        "body": "{\"token_type\":\"Bearer\",\"expires_in\":3600,\"access_token\":\"mock-access-token\",\"scope\":\"okta.groups.read okta.users.read\"}",
+        "description": "okta oauth 2.0 token authentication"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups",
+        "status_code": 200,
+        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "description": "fetch all okta groups (returns engineering group)"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups/00g1234567890abcdef/users",
+        "status_code": 503,
+        "body": "{\"errorCode\":\"E0000009\",\"errorSummary\":\"Service Unavailable\"}",
+        "description": "okta api error fetching group members (service unavailable)"
+      }
+    ]
+  },
+  {
+    "name": "okta_sync_github_api_error_no_removal",
+    "description": "Test that users are not removed when GitHub API returns error fetching team members",
+    "event_type": "scheduled_event",
+    "event_payload": {
+      "action": "okta-sync"
+    },
+    "expected_calls": [
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/*/teams/*"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering",
+        "status_code": 200,
+        "body": "{\"id\":1,\"name\":\"Engineering\",\"slug\":\"engineering\",\"description\":\"Engineering team\"}",
+        "description": "fetch engineering team details"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering/members",
+        "status_code": 500,
+        "body": "{\"message\":\"Internal Server Error\"}",
+        "description": "github api error fetching team members (server error)"
+      },
+      {
+        "service": "okta",
+        "method": "POST",
+        "path": "/oauth2/v1/token",
+        "status_code": 200,
+        "body": "{\"token_type\":\"Bearer\",\"expires_in\":3600,\"access_token\":\"mock-access-token\",\"scope\":\"okta.groups.read okta.users.read\"}",
+        "description": "okta oauth 2.0 token authentication"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups",
+        "status_code": 200,
+        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "description": "fetch all okta groups (returns engineering group)"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups/00g1234567890abcdef/users",
+        "status_code": 200,
+        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}}]",
+        "description": "fetch users in engineering group (returns alice-gh)"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "status_code": 200,
+        "body": "{\"ok\":true,\"channel\":\"C01234TEST\",\"ts\":\"1234567890.123456\"}",
+        "description": "send sync report with errors to slack"
+      }
+    ]
+  },
+  {
+    "name": "okta_sync_with_orphaned_users",
+    "description": "Test Okta sync that detects orphaned users (org members not in any synced teams)",
+    "event_type": "scheduled_event",
+    "event_payload": {
+      "action": "okta-sync"
+    },
+    "config_overrides": {
+      "APP_OKTA_ORPHANED_USER_NOTIFICATIONS": "true"
+    },
+    "expected_calls": [
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/*/teams/*"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/*/members"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering",
+        "status_code": 200,
+        "body": "{\"id\":1,\"name\":\"Engineering\",\"slug\":\"engineering\",\"description\":\"Engineering team\"}",
+        "description": "fetch engineering team details"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering/members",
+        "status_code": 200,
+        "body": "[{\"login\":\"alice-gh\",\"id\":1,\"type\":\"User\"}]",
+        "description": "engineering team has alice-gh"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/members",
+        "status_code": 200,
+        "body": "[{\"login\":\"alice-gh\",\"id\":1,\"type\":\"User\"},{\"login\":\"bob-gh\",\"id\":2,\"type\":\"User\"},{\"login\":\"charlie-gh\",\"id\":3,\"type\":\"User\"}]",
+        "description": "org has three members: alice-gh, bob-gh, charlie-gh"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/memberships/bob-gh",
+        "status_code": 200,
+        "body": "{\"state\":\"active\",\"role\":\"member\"}",
+        "description": "bob-gh is an org member (not external)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/memberships/charlie-gh",
+        "status_code": 200,
+        "body": "{\"state\":\"active\",\"role\":\"member\"}",
+        "description": "charlie-gh is an org member (not external)"
+      },
+      {
+        "service": "okta",
+        "method": "POST",
+        "path": "/oauth2/v1/token",
+        "status_code": 200,
+        "body": "{\"token_type\":\"Bearer\",\"expires_in\":3600,\"access_token\":\"mock-access-token\",\"scope\":\"okta.groups.read okta.users.read\"}",
+        "description": "okta oauth 2.0 token authentication"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups",
+        "status_code": 200,
+        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "description": "fetch all okta groups (returns engineering group)"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups/00g1234567890abcdef/users",
+        "status_code": 200,
+        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}}]",
+        "description": "fetch users in engineering group (returns only alice-gh)"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "status_code": 200,
+        "body": "{\"ok\":true,\"channel\":\"C01234TEST\",\"ts\":\"1234567890.123456\"}",
+        "description": "send sync report notification to slack"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "status_code": 200,
+        "body": "{\"ok\":true,\"channel\":\"C01234TEST\",\"ts\":\"1234567890.123457\"}",
+        "description": "send orphaned users notification to slack (bob-gh and charlie-gh)"
+      }
+    ]
+  },
+  {
+    "name": "okta_sync_no_orphaned_users",
+    "description": "Test Okta sync with no orphaned users detected (all org members are in synced teams)",
+    "event_type": "scheduled_event",
+    "event_payload": {
+      "action": "okta-sync"
+    },
+    "config_overrides": {
+      "APP_OKTA_ORPHANED_USER_NOTIFICATIONS": "true"
+    },
+    "expected_calls": [
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/*/teams/*"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/*/members"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering",
+        "status_code": 200,
+        "body": "{\"id\":1,\"name\":\"Engineering\",\"slug\":\"engineering\",\"description\":\"Engineering team\"}",
+        "description": "fetch engineering team details"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering/members",
+        "status_code": 200,
+        "body": "[{\"login\":\"alice-gh\",\"id\":1,\"type\":\"User\"},{\"login\":\"bob-gh\",\"id\":2,\"type\":\"User\"}]",
+        "description": "engineering team has alice-gh and bob-gh"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/members",
+        "status_code": 200,
+        "body": "[{\"login\":\"alice-gh\",\"id\":1,\"type\":\"User\"},{\"login\":\"bob-gh\",\"id\":2,\"type\":\"User\"}]",
+        "description": "org has two members: alice-gh and bob-gh (both in synced teams)"
+      },
+      {
+        "service": "okta",
+        "method": "POST",
+        "path": "/oauth2/v1/token",
+        "status_code": 200,
+        "body": "{\"token_type\":\"Bearer\",\"expires_in\":3600,\"access_token\":\"mock-access-token\",\"scope\":\"okta.groups.read okta.users.read\"}",
+        "description": "okta oauth 2.0 token authentication"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups",
+        "status_code": 200,
+        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "description": "fetch all okta groups (returns engineering group)"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups/00g1234567890abcdef/users",
+        "status_code": 200,
+        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}},{\"id\":\"00u2222222222222222\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"bob@example.com\",\"githubUsername\":\"bob-gh\"}}]",
+        "description": "fetch users in engineering group (returns alice-gh and bob-gh)"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "status_code": 200,
+        "body": "{\"ok\":true,\"channel\":\"C01234TEST\",\"ts\":\"1234567890.123456\"}",
+        "description": "send sync report notification to slack (no orphaned users notification)"
+      }
+    ]
+  },
+  {
+    "name": "okta_sync_orphaned_users_disabled",
+    "description": "Test Okta sync with orphaned user detection disabled via config",
+    "event_type": "scheduled_event",
+    "event_payload": {
+      "action": "okta-sync"
+    },
+    "config_overrides": {
+      "APP_OKTA_ORPHANED_USER_NOTIFICATIONS": "false"
+    },
+    "expected_calls": [
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/*/teams/*"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering",
+        "status_code": 200,
+        "body": "{\"id\":1,\"name\":\"Engineering\",\"slug\":\"engineering\",\"description\":\"Engineering team\"}",
+        "description": "fetch engineering team details"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/orgs/acme-ghorg/teams/engineering/members",
+        "status_code": 200,
+        "body": "[{\"login\":\"alice-gh\",\"id\":1,\"type\":\"User\"}]",
+        "description": "engineering team has alice-gh"
+      },
+      {
+        "service": "okta",
+        "method": "POST",
+        "path": "/oauth2/v1/token",
+        "status_code": 200,
+        "body": "{\"token_type\":\"Bearer\",\"expires_in\":3600,\"access_token\":\"mock-access-token\",\"scope\":\"okta.groups.read okta.users.read\"}",
+        "description": "okta oauth 2.0 token authentication"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups",
+        "status_code": 200,
+        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "description": "fetch all okta groups (returns engineering group)"
+      },
+      {
+        "service": "okta",
+        "method": "GET",
+        "path": "/api/v1/groups/00g1234567890abcdef/users",
+        "status_code": 200,
+        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}}]",
+        "description": "fetch users in engineering group (returns alice-gh)"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "status_code": 200,
+        "body": "{\"ok\":true,\"channel\":\"C01234TEST\",\"ts\":\"1234567890.123456\"}",
+        "description": "send sync report notification to slack (orphaned user check skipped)"
+      }
+    ]
+  }
+]

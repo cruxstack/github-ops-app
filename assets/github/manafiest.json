@@ -1,0 +1,22 @@
+{
+  "name": "github-ops-app",
+  "url": "https://github.com/cruxstack/github-ops-app",
+  "hook_attributes": {
+    "url": "https://your-api-gateway-url.execute-api.region.amazonaws.com/webhook",
+    "active": true
+  },
+  "redirect_url": "https://github.com/cruxstack/github-ops-app",
+  "description": "Bot that automates GitHub operations with Okta integration and Slack notifications",
+  "public": true,
+  "default_permissions": {
+    "organization_administration": "read",
+    "members": "write",
+    "contents": "read",
+    "pull_requests": "read"
+  },
+  "default_events": [
+    "pull_request",
+    "team",
+    "membership"
+  ]
+}
