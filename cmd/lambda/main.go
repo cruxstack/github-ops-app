@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	awsevents "github.com/aws/aws-lambda-go/events"
@@ -57,11 +58,19 @@ func APIGatewayHandler(ctx context.Context, req awsevents.APIGatewayProxyRequest
 		logger.Debug("received api gateway request", slog.String("request", string(j)))
 	}
 
-	if req.Path == "/server/status" {
+	path := req.Path
+	if appInst.Config.BasePath != "" {
+		path = strings.TrimPrefix(path, appInst.Config.BasePath)
+		if path == "" {
+			path = "/"
+		}
+	}
+
+	if path == "/server/status" {
 		return handleServerStatus(ctx, req)
 	}
 
-	if req.Path == "/server/config" {
+	if path == "/server/config" {
 		return handleServerConfig(ctx, req)
 	}
 
