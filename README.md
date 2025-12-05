@@ -19,10 +19,10 @@ notifications. Deploy as AWS Lambda, standard HTTP server, or container.
 
 ### Prerequisites
 
-* GitHub App ([setup guide](#github-app-setup))
 * Go ≥ 1.24
-* **Optional**: Okta API Service app for group sync
-* **Optional**: Slack app for notifications
+* GitHub App ([setup guide](docs/github-app-setup.md))
+* **Optional**: Okta API Service app ([setup guide](docs/okta-setup.md))
+* **Optional**: Slack app ([setup guide](docs/slack-setup.md))
 
 ### Deployment Options
 
@@ -176,36 +176,14 @@ Map Okta groups to GitHub teams using JSON rules:
   Okta-synced teams and sends Slack notifications. Enabled by default when
   sync is enabled.
 
-## Okta Setup
+## Integration Setup
 
-Create an API Services application in Okta Admin Console:
+Detailed setup guides for each integration:
 
-1. **Applications** → **Create App Integration** → **API Services**
-2. Name: `github-bot-api-service`
-3. **Client Credentials**:
-   - Authentication: **Public key / Private key**
-   - Generate and download private key (PEM format)
-   - Note the Client ID
-4. **Okta API Scopes**: Grant `okta.groups.read` and `okta.users.read`
-
-Use the Client ID and private key in your environment variables.
-
-## GitHub App Setup
-
-Create a GitHub App in your organization settings:
-
-1. **Developer settings** → **GitHub Apps** → **New GitHub App**
-2. **Basic info**:
-   - Name: `github-ops-app`
-   - Webhook URL: Your API Gateway URL
-   - Webhook secret: Generate and save for `APP_GITHUB_WEBHOOK_SECRET`
-3. **Permissions**:
-   - Repository: Pull requests (Read), Contents (Read)
-   - Organization: Members (Read & write), Administration (Read)
-4. **Events**: Subscribe to Pull request, Team, Membership
-5. Generate and download private key (`.pem` file)
-6. Install app to your organization
-7. Note: **App ID**, **Installation ID** (from install URL), **Private key**
+- [GitHub App Setup](docs/github-app-setup.md) - Create and install the GitHub
+  App with required permissions
+- [Okta Setup](docs/okta-setup.md) - Configure API Services app for group sync
+- [Slack Setup](docs/slack-setup.md) - Create Slack app for notifications
 
 ## Development
 
@@ -243,15 +221,63 @@ CMD ["/server"]
 
 ## How It Works
 
-**Okta Sync**: EventBridge triggers sync → Fetch Okta groups → Apply rules →
-Update GitHub teams → Detect orphaned users → Send Slack reports. Automatically
-reconciles when external team changes are detected. Only syncs ACTIVE Okta
-users, skips external collaborators, and prevents mass removal during outages
-via safety threshold. Orphaned user detection identifies org members not in any
-synced teams.
+```
+                              ┌─────────────────────────────────────────────────┐
+                              │              github-ops-app                     │
+                              │                                                 │
+  ┌──────────────┐            │  ┌───────────────────────────────────────────┐  │
+  │    GitHub    │ webhooks   │  │              Webhook Handler              │  │
+  │              │───────────────▶  • PR merge events                        │  │
+  │  • PR merge  │            │  │  • Team membership changes                │  │
+  │  • Team edit │            │  │  • Signature verification                 │  │
+  └──────────────┘            │  └─────────────┬─────────────────────────────┘  │
+                              │                │                                │
+                              │                ▼                                │
+                              │  ┌─────────────────────────────────────────┐    │
+                              │  │          PR Compliance Check            │    │
+  ┌──────────────┐            │  │  • Branch protection verification       │────────┐
+  │    Okta      │            │  │  • Required checks validation           │    │   │
+  │              │            │  │  • Bypass detection                     │    │   │
+  │  • Groups    │◀──────────────┴─────────────────────────────────────────┘    │   │
+  │  • Users     │            │                                                 │   │
+  └──────────────┘            │  ┌─────────────────────────────────────────┐    │   │
+        │                     │  │             Okta Sync Engine            │    │   │
+        │                     │  │  • Match groups via rules               │    │   │
+        └─────────────────────────▶  • Create/update GitHub teams          │    │   │
+                              │  │  • Sync team membership                 │    │   │
+                              │  │  • Orphaned user detection              │────────┤
+                              │  │  • Safety threshold protection          │    │   │
+  ┌──────────────┐            │  └─────────────────────────────────────────┘    │   │
+  │   GitHub     │            │                │                                │   │
+  │   Teams API  │◀─────────────────────────────────────────────────────────────┘   │
+  │              │            │                                                 │   │
+  │  • Teams     │            └─────────────────────────────────────────────────┘   │
+  │  • Members   │                                                                  │
+  └──────────────┘                                                                  │
+                              ┌──────────────┐                                      │
+                              │    Slack     │◀─────────────────────────────────────┘
+                              │              │       Notifications
+                              │  • Alerts    │       • PR violations
+                              │  • Reports   │       • Sync reports
+                              └──────────────┘       • Orphaned users
+```
 
-**PR Compliance**: Webhook on PR merge → Verify signature → Check branch
-protection rules → Detect bypasses → Notify Slack if violations found.
+### Okta Sync Flow
+
+1. **Trigger**: Scheduled cron/EventBridge or team membership webhook
+2. **Fetch**: Query Okta groups matching configured rules
+3. **Match**: Apply sync rules to map Okta groups → GitHub teams
+4. **Sync**: Add/remove GitHub team members (ACTIVE Okta users only)
+5. **Safety**: Abort if removal ratio exceeds threshold (default 50%)
+6. **Report**: Send Slack notification with changes and orphaned users
+
+### PR Compliance Flow
+
+1. **Receive**: GitHub webhook on PR merge to monitored branch
+2. **Verify**: Validate webhook signature (HMAC-SHA256)
+3. **Check**: Query branch protection rules and required status checks
+4. **Detect**: Identify bypasses (admin override, missing reviews, failed checks)
+5. **Notify**: Send Slack alert with violation details
 
 ## Troubleshooting
 
