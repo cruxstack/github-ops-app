@@ -257,16 +257,24 @@ func NewConfigWithContext(ctx context.Context) (*Config, error) {
 
 // NewLogger creates a new structured logger.
 // uses JSON format in Lambda, text format elsewhere.
+// sets log level to debug when APP_DEBUG_ENABLED is true.
 func NewLogger() *slog.Logger {
 	var handler slog.Handler
 
+	debugEnabled, _ := strconv.ParseBool(os.Getenv("APP_DEBUG_ENABLED"))
+
+	level := slog.LevelInfo
+	if debugEnabled {
+		level = slog.LevelDebug
+	}
+
 	if os.Getenv("AWS_LAMBDA_FUNCTION_NAME") != "" {
 		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelInfo,
+			Level: level,
 		})
 	} else {
 		handler = slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-			Level: slog.LevelDebug,
+			Level: level,
 		})
 	}
 
