@@ -90,7 +90,7 @@ func UniversalHandler(ctx context.Context, event json.RawMessage) (any, error)
 ```
 
 **Supported Events**:
-- `APIGatewayProxyRequest` → Routes to webhook/status/config handlers
+- `APIGatewayV2HTTPRequest` → Routes to webhook/status/config handlers
 - `CloudWatchEvent` (EventBridge) → Routes to scheduled event processor
 
 ### Endpoints
