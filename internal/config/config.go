@@ -49,6 +49,8 @@ type Config struct {
 	SlackToken   string
 	SlackChannel string
 	SlackAPIURL  string
+
+	BasePath string
 }
 
 var (
@@ -246,6 +248,12 @@ func NewConfigWithContext(ctx context.Context) (*Config, error) {
 
 	cfg.SlackEnabled = cfg.SlackToken != "" && cfg.SlackChannel != ""
 
+	basePath := os.Getenv("APP_BASE_PATH")
+	if basePath != "" {
+		basePath = "/" + strings.Trim(basePath, "/")
+	}
+	cfg.BasePath = basePath
+
 	orphanedUserNotifications, _ := strconv.ParseBool(os.Getenv("APP_OKTA_ORPHANED_USER_NOTIFICATIONS"))
 	if os.Getenv("APP_OKTA_ORPHANED_USER_NOTIFICATIONS") == "" {
 		orphanedUserNotifications = cfg.IsOktaSyncEnabled()
@@ -345,6 +353,8 @@ type RedactedConfig struct {
 	SlackToken   string `json:"slack_token"`
 	SlackChannel string `json:"slack_channel"`
 	SlackAPIURL  string `json:"slack_api_url"`
+
+	BasePath string `json:"base_path"`
 }
 
 // Redacted returns a copy of the config with secrets redacted.
@@ -386,5 +396,6 @@ func (c *Config) Redacted() RedactedConfig {
 		SlackToken:                    redact(c.SlackToken),
 		SlackChannel:                  c.SlackChannel,
 		SlackAPIURL:                   c.SlackAPIURL,
+		BasePath:                      c.BasePath,
 	}
 }
