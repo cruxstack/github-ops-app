@@ -72,6 +72,7 @@ type ClientConfig struct {
 	Domain          string
 	ClientID        string
 	PrivateKey      []byte
+	PrivateKeyID    string
 	Scopes          []string
 	GitHubUserField string
 	BaseURL         string
@@ -105,6 +106,10 @@ func NewClientWithContext(ctx context.Context, cfg *ClientConfig) (*Client, erro
 		okta.WithAuthorizationMode("PrivateKey"),
 		okta.WithClientId(cfg.ClientID),
 		okta.WithPrivateKey(string(privateKey)),
+	}
+
+	if cfg.PrivateKeyID != "" {
+		opts = append(opts, okta.WithPrivateKeyId(cfg.PrivateKeyID))
 	}
 
 	if len(cfg.Scopes) > 0 {

@@ -34,6 +34,7 @@ type Config struct {
 	OktaDomain              string
 	OktaClientID            string
 	OktaPrivateKey          []byte
+	OktaPrivateKeyID        string
 	OktaScopes              []string
 	OktaBaseURL             string
 	OktaSyncRules           []okta.SyncRule
@@ -213,6 +214,8 @@ func NewConfigWithContext(ctx context.Context) (*Config, error) {
 		cfg.OktaPrivateKey = []byte(privateKeyEnv)
 	}
 
+	cfg.OktaPrivateKeyID = os.Getenv("APP_OKTA_PRIVATE_KEY_ID")
+
 	if scopesStr := os.Getenv("APP_OKTA_SCOPES"); scopesStr != "" {
 		scopes := strings.Split(scopesStr, ",")
 		for i := range scopes {
@@ -338,6 +341,7 @@ type RedactedConfig struct {
 	OktaDomain              string          `json:"okta_domain"`
 	OktaClientID            string          `json:"okta_client_id"`
 	OktaPrivateKey          string          `json:"okta_private_key"`
+	OktaPrivateKeyID        string          `json:"okta_private_key_id"`
 	OktaScopes              []string        `json:"okta_scopes"`
 	OktaBaseURL             string          `json:"okta_base_url"`
 	OktaSyncRules           []okta.SyncRule `json:"okta_sync_rules"`
@@ -384,6 +388,7 @@ func (c *Config) Redacted() RedactedConfig {
 		OktaDomain:                    c.OktaDomain,
 		OktaClientID:                  redact(c.OktaClientID),
 		OktaPrivateKey:                redactBytes(c.OktaPrivateKey),
+		OktaPrivateKeyID:              c.OktaPrivateKeyID,
 		OktaScopes:                    c.OktaScopes,
 		OktaBaseURL:                   c.OktaBaseURL,
 		OktaSyncRules:                 c.OktaSyncRules,

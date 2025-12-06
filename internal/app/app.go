@@ -54,6 +54,7 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 			Domain:          cfg.OktaDomain,
 			ClientID:        cfg.OktaClientID,
 			PrivateKey:      cfg.OktaPrivateKey,
+			PrivateKeyID:    cfg.OktaPrivateKeyID,
 			Scopes:          cfg.OktaScopes,
 			GitHubUserField: cfg.OktaGitHubUserField,
 			BaseURL:         cfg.OktaBaseURL,
