@@ -23,6 +23,7 @@ type PRComplianceResult struct {
 	PR               *github.PullRequest
 	BaseBranch       string
 	Protection       *github.Protection
+	BranchRules      *github.BranchRules
 	Violations       []ComplianceViolation
 	UserHasBypass    bool
 	UserBypassReason string
@@ -51,36 +52,49 @@ func (c *Client) CheckPRCompliance(ctx context.Context, owner, repo string, prNu
 
 	baseBranch := *pr.Base.Ref
 
-	protection, _, err := c.client.Repositories.GetBranchProtection(ctx, owner, repo, baseBranch)
-	if err != nil {
-		return &PRComplianceResult{
-			PR:         pr,
-			BaseBranch: baseBranch,
-			Violations: []ComplianceViolation{},
-		}, nil
-	}
-
 	result := &PRComplianceResult{
 		PR:         pr,
 		BaseBranch: baseBranch,
-		Protection: protection,
 		Violations: []ComplianceViolation{},
 	}
 
-	c.checkReviewRequirements(ctx, owner, repo, pr, protection, result)
-	c.checkStatusRequirements(ctx, owner, repo, pr, protection, result)
+	// fetch legacy branch protection rules
+	protection, _, err := c.client.Repositories.GetBranchProtection(ctx, owner, repo, baseBranch)
+	if err == nil {
+		result.Protection = protection
+	}
+
+	// fetch repository rulesets for the branch
+	branchRules, _, err := c.client.Repositories.GetRulesForBranch(ctx, owner, repo, baseBranch, nil)
+	if err == nil {
+		result.BranchRules = branchRules
+	}
+
+	c.checkReviewRequirements(ctx, owner, repo, pr, result)
+	c.checkStatusRequirements(ctx, owner, repo, pr, result)
 	c.checkUserBypassPermission(ctx, owner, repo, pr, result)
 
 	return result, nil
 }
 
 // checkReviewRequirements validates that PR had required approving reviews.
-func (c *Client) checkReviewRequirements(ctx context.Context, owner, repo string, pr *github.PullRequest, protection *github.Protection, result *PRComplianceResult) {
-	if protection.RequiredPullRequestReviews == nil {
-		return
+// checks both legacy branch protection and repository rulesets.
+func (c *Client) checkReviewRequirements(ctx context.Context, owner, repo string, pr *github.PullRequest, result *PRComplianceResult) {
+	requiredApprovals := 0
+
+	// check legacy branch protection
+	if result.Protection != nil && result.Protection.RequiredPullRequestReviews != nil {
+		requiredApprovals = result.Protection.RequiredPullRequestReviews.RequiredApprovingReviewCount
 	}
 
-	requiredApprovals := protection.RequiredPullRequestReviews.RequiredApprovingReviewCount
+	// check repository rulesets (use the highest requirement)
+	if result.BranchRules != nil {
+		for _, rule := range result.BranchRules.PullRequest {
+			if rule.Parameters.RequiredApprovingReviewCount > requiredApprovals {
+				requiredApprovals = rule.Parameters.RequiredApprovingReviewCount
+			}
+		}
+	}
 
 	if requiredApprovals == 0 {
 		return
@@ -107,16 +121,36 @@ func (c *Client) checkReviewRequirements(ctx context.Context, owner, repo string
 }
 
 // checkStatusRequirements validates that required status checks passed.
-func (c *Client) checkStatusRequirements(ctx context.Context, owner, repo string, pr *github.PullRequest, protection *github.Protection, result *PRComplianceResult) {
-	if protection.RequiredStatusChecks == nil || protection.RequiredStatusChecks.Contexts == nil || len(*protection.RequiredStatusChecks.Contexts) == 0 {
-		return
-	}
-
+// checks both legacy branch protection and repository rulesets.
+func (c *Client) checkStatusRequirements(ctx context.Context, owner, repo string, pr *github.PullRequest, result *PRComplianceResult) {
 	if pr.Head == nil || pr.Head.SHA == nil {
 		return
 	}
 
-	requiredChecks := *protection.RequiredStatusChecks.Contexts
+	// collect required checks from both sources
+	requiredChecks := make(map[string]bool)
+
+	// check legacy branch protection
+	if result.Protection != nil &&
+		result.Protection.RequiredStatusChecks != nil &&
+		result.Protection.RequiredStatusChecks.Contexts != nil {
+		for _, check := range *result.Protection.RequiredStatusChecks.Contexts {
+			requiredChecks[check] = true
+		}
+	}
+
+	// check repository rulesets
+	if result.BranchRules != nil {
+		for _, rule := range result.BranchRules.RequiredStatusChecks {
+			for _, check := range rule.Parameters.RequiredStatusChecks {
+				requiredChecks[check.Context] = true
+			}
+		}
+	}
+
+	if len(requiredChecks) == 0 {
+		return
+	}
 
 	combinedStatus, _, err := c.client.Repositories.GetCombinedStatus(ctx, owner, repo, *pr.Head.SHA, nil)
 	if err != nil {
@@ -130,7 +164,7 @@ func (c *Client) checkStatusRequirements(ctx context.Context, owner, repo string
 		}
 	}
 
-	for _, required := range requiredChecks {
+	for required := range requiredChecks {
 		if !passedChecks[required] {
 			result.Violations = append(result.Violations, ComplianceViolation{
 				Type:        "missing_status_check",
