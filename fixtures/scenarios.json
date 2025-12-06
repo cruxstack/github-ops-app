@@ -156,6 +156,11 @@
       {
         "service": "github",
         "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/rules/branches/main"
+      },
+      {
+        "service": "github",
+        "method": "GET",
         "path": "/repos/acme-ghorg/fake-app-repo/pulls/456/reviews"
       },
       {
@@ -193,6 +198,14 @@
         "status_code": 200,
         "body": "{\"required_pull_request_reviews\":{\"required_approving_review_count\":2,\"dismiss_stale_reviews\":true},\"enforce_admins\":{\"enabled\":true}}",
         "description": "fetch branch protection rules (requires 2 approvals, enforce for admins)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/rules/branches/main",
+        "status_code": 200,
+        "body": "[]",
+        "description": "fetch repository rulesets (none configured)"
       },
       {
         "service": "github",
@@ -274,6 +287,11 @@
       {
         "service": "github",
         "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/rules/branches/main"
+      },
+      {
+        "service": "github",
+        "method": "GET",
         "path": "/repos/acme-ghorg/fake-app-repo/pulls/789/reviews"
       }
     ],
@@ -305,10 +323,149 @@
       {
         "service": "github",
         "method": "GET",
+        "path": "/repos/acme-ghorg/fake-app-repo/rules/branches/main",
+        "status_code": 200,
+        "body": "[]",
+        "description": "fetch repository rulesets (none configured)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
         "path": "/repos/acme-ghorg/fake-app-repo/pulls/789/reviews",
         "status_code": 200,
         "body": "[{\"state\":\"APPROVED\",\"user\":{\"login\":\"reviewer1\"}},{\"state\":\"APPROVED\",\"user\":{\"login\":\"reviewer2\"}}]",
         "description": "fetch pr reviews (2 approvals, meets requirements)"
+      }
+    ]
+  },
+  {
+    "name": "pr_webhook_ruleset_bypass",
+    "description": "Detect bypass when repo uses rulesets instead of legacy branch protection",
+    "event_type": "webhook",
+    "webhook_type": "pull_request",
+    "config_overrides": {
+      "APP_GITHUB_WEBHOOK_SECRET": ""
+    },
+    "webhook_payload": {
+      "action": "closed",
+      "number": 101,
+      "pull_request": {
+        "id": 101,
+        "number": 101,
+        "state": "closed",
+        "merged": true,
+        "merged_at": "2025-11-22T12:00:00Z",
+        "merged_by": {
+          "login": "admin-user",
+          "id": 2,
+          "type": "User"
+        },
+        "head": {
+          "ref": "feature-branch",
+          "sha": "abc123def456"
+        },
+        "base": {
+          "ref": "main",
+          "sha": "def456abc123"
+        },
+        "html_url": "https://github.com/acme-ghorg/ruleset-repo/pull/101"
+      },
+      "repository": {
+        "name": "ruleset-repo",
+        "full_name": "acme-ghorg/ruleset-repo",
+        "owner": {
+          "login": "acme-ghorg"
+        }
+      }
+    },
+    "expected_calls": [
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/ruleset-repo/pulls/101"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/ruleset-repo/branches/main/protection"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/ruleset-repo/rules/branches/main"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/ruleset-repo/pulls/101/reviews"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/ruleset-repo/collaborators/admin-user/permission"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage"
+      }
+    ],
+    "mock_responses": [
+      {
+        "service": "github",
+        "method": "POST",
+        "path": "/app/installations/987654/access_tokens",
+        "status_code": 201,
+        "body": "{\"token\":\"ghs_mock_installation_token\",\"expires_at\":\"2099-12-31T23:59:59Z\"}",
+        "description": "github app installation token authentication"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/ruleset-repo/pulls/101",
+        "status_code": 200,
+        "body": "{\"number\":101,\"state\":\"closed\",\"merged\":true,\"merged_at\":\"2025-11-22T12:00:00Z\",\"merged_by\":{\"login\":\"admin-user\"},\"base\":{\"ref\":\"main\"}}",
+        "description": "fetch pr #101 details (merged by admin-user)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/ruleset-repo/branches/main/protection",
+        "status_code": 404,
+        "body": "{\"message\":\"Branch not protected\"}",
+        "description": "no legacy branch protection configured"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/ruleset-repo/rules/branches/main",
+        "status_code": 200,
+        "body": "[{\"type\":\"pull_request\",\"ruleset_source_type\":\"Repository\",\"ruleset_source\":\"acme-ghorg/ruleset-repo\",\"ruleset_id\":123,\"parameters\":{\"required_approving_review_count\":1,\"dismiss_stale_reviews_on_push\":false,\"require_code_owner_review\":false,\"require_last_push_approval\":false,\"required_review_thread_resolution\":false}}]",
+        "description": "fetch repository rulesets (requires 1 approval via ruleset)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/ruleset-repo/pulls/101/reviews",
+        "status_code": 200,
+        "body": "[]",
+        "description": "fetch pr reviews (no approvals)"
+      },
+      {
+        "service": "github",
+        "method": "GET",
+        "path": "/repos/acme-ghorg/ruleset-repo/collaborators/admin-user/permission",
+        "status_code": 200,
+        "body": "{\"permission\":\"admin\",\"user\":{\"login\":\"admin-user\"}}",
+        "description": "check merger permissions (admin-user has admin permission)"
+      },
+      {
+        "service": "slack",
+        "method": "POST",
+        "path": "/chat.postMessage",
+        "status_code": 200,
+        "body": "{\"ok\":true,\"channel\":\"C01234TEST\",\"ts\":\"1234567890.123456\"}",
+        "description": "send bypass alert notification to slack"
       }
     ]
   },
