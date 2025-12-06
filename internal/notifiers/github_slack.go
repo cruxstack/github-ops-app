@@ -116,6 +116,9 @@ func (s *SlackNotifier) NotifyOktaSync(ctx context.Context, reports []*okta.Sync
 		if len(report.MembersSkippedExternal) > 0 {
 			sectionText += fmt.Sprintf("\n*Skipped (External):* %d members", len(report.MembersSkippedExternal))
 		}
+		if len(report.MembersSkippedNoGHUsername) > 0 {
+			sectionText += fmt.Sprintf("\n*Skipped (No GitHub Username):* %d members", len(report.MembersSkippedNoGHUsername))
+		}
 		if len(report.Errors) > 0 {
 			sectionText += fmt.Sprintf("\n*Errors:* %d", len(report.Errors))
 		}
