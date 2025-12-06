@@ -15,15 +15,36 @@ import (
 // SyncRule defines how to sync Okta groups to GitHub teams.
 type SyncRule struct {
 	Name                string `json:"name"`
-	Enabled             bool   `json:"enabled"`
+	Enabled             *bool  `json:"enabled,omitempty"`
 	OktaGroupPattern    string `json:"okta_group_pattern,omitempty"`
 	OktaGroupName       string `json:"okta_group_name,omitempty"`
 	GitHubTeamPrefix    string `json:"github_team_prefix,omitempty"`
 	GitHubTeamName      string `json:"github_team_name,omitempty"`
 	StripPrefix         string `json:"strip_prefix,omitempty"`
-	SyncMembers         bool   `json:"sync_members"`
+	SyncMembers         *bool  `json:"sync_members,omitempty"`
 	CreateTeamIfMissing bool   `json:"create_team_if_missing"`
 	TeamPrivacy         string `json:"team_privacy,omitempty"`
+}
+
+// IsEnabled returns true if the rule is enabled (defaults to true).
+func (r SyncRule) IsEnabled() bool {
+	return r.Enabled == nil || *r.Enabled
+}
+
+// ShouldSyncMembers returns true if members should be synced (defaults to true).
+func (r SyncRule) ShouldSyncMembers() bool {
+	return r.SyncMembers == nil || *r.SyncMembers
+}
+
+// GetName returns the rule name, defaulting to GitHubTeamName if not set.
+func (r SyncRule) GetName() string {
+	if r.Name != "" {
+		return r.Name
+	}
+	if r.GitHubTeamName != "" {
+		return r.GitHubTeamName
+	}
+	return r.OktaGroupName
 }
 
 // SyncReport contains the results of syncing a single Okta group to GitHub
@@ -88,16 +109,16 @@ func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
 	var syncErrors []string
 
 	for _, rule := range s.rules {
-		if !rule.Enabled {
+		if !rule.IsEnabled() {
 			continue
 		}
 
 		ruleReports, err := s.syncRule(ctx, rule)
 		if err != nil {
-			errMsg := fmt.Sprintf("rule '%s' failed: %v", rule.Name, err)
+			errMsg := fmt.Sprintf("rule '%s' failed: %v", rule.GetName(), err)
 			syncErrors = append(syncErrors, errMsg)
 			s.logger.Error("sync rule failed",
-				slog.String("rule", rule.Name),
+				slog.String("rule", rule.GetName()),
 				slog.String("error", err.Error()))
 			continue
 		}
@@ -216,7 +237,7 @@ func (s *Syncer) computeTeamName(oktaGroupName string, rule SyncRule) string {
 // creates team if missing and syncs members if enabled.
 func (s *Syncer) syncGroupToTeam(ctx context.Context, rule SyncRule, group *GroupInfo, teamName string) *SyncReport {
 	report := &SyncReport{
-		Rule:                       rule.Name,
+		Rule:                       rule.GetName(),
 		OktaGroup:                  group.Name,
 		GitHubTeam:                 teamName,
 		MembersSkippedNoGHUsername: group.SkippedNoGitHubUsername,
@@ -247,7 +268,7 @@ func (s *Syncer) syncGroupToTeam(ctx context.Context, rule SyncRule, group *Grou
 		return report
 	}
 
-	if !rule.SyncMembers {
+	if !rule.ShouldSyncMembers() {
 		return report
 	}
 
