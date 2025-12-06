@@ -1,12 +1,12 @@
 {
     "display_information": {
-        "name": "GitHub Bot",
-        "description": "GitHub automation bot with Okta sync and PR compliance monitoring",
-        "background_color": "#24292e"
+        "name": "GitHub Ops Bot",
+        "description": "GitHub automation bot with user sync and compliance monitoring",
+        "background_color": "#10203B"
     },
     "features": {
         "bot_user": {
-            "display_name": "GitHub Bot",
+            "display_name": "GitHub Ops Bot",
             "always_online": false
         }
     },
