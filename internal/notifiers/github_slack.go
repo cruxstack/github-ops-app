@@ -98,43 +98,130 @@ func (s *SlackNotifier) NotifyOktaSync(ctx context.Context, reports []*okta.Sync
 		return nil
 	}
 
+	// aggregate stats
+	var totalAdded, totalRemoved int
+	var rulesWithChanges, rulesWithoutChanges []*okta.SyncReport
+	var allErrors []string
+	var allSkippedExternal, allSkippedNoGHUsername []string
+
+	for _, report := range reports {
+		totalAdded += len(report.MembersAdded)
+		totalRemoved += len(report.MembersRemoved)
+
+		if report.HasChanges() {
+			rulesWithChanges = append(rulesWithChanges, report)
+		} else {
+			rulesWithoutChanges = append(rulesWithoutChanges, report)
+		}
+
+		for _, err := range report.Errors {
+			allErrors = append(allErrors, fmt.Sprintf("%s: %s", report.GitHubTeam, err))
+		}
+
+		allSkippedExternal = append(allSkippedExternal, report.MembersSkippedExternal...)
+		allSkippedNoGHUsername = append(allSkippedNoGHUsername, report.MembersSkippedNoGHUsername...)
+	}
+
 	blocks := []slack.Block{
 		slack.NewHeaderBlock(
-			slack.NewTextBlockObject("plain_text", "✅ Okta Group Sync Complete", false, false),
+			slack.NewTextBlockObject("plain_text", "Okta Group Sync Complete", false, false),
 		),
 	}
 
-	for _, report := range reports {
-		sectionText := fmt.Sprintf("*Rule:* %s\n*Okta Group:* %s\n*GitHub Team:* %s", report.Rule, report.OktaGroup, report.GitHubTeam)
+	// summary stats in fields
+	summaryFields := []*slack.TextBlockObject{
+		slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*Rules Processed*\n%d", len(reports)), false, false),
+		slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*Members Added*\n%d", totalAdded), false, false),
+		slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*Members Removed*\n%d", totalRemoved), false, false),
+	}
+	blocks = append(blocks, slack.NewSectionBlock(nil, summaryFields, nil))
 
-		if len(report.MembersAdded) > 0 {
-			sectionText += fmt.Sprintf("\n*Added:* %d members", len(report.MembersAdded))
+	// table of rules with changes
+	if len(rulesWithChanges) > 0 {
+		blocks = append(blocks, slack.NewDividerBlock())
+
+		tableText := "*Rules with changes:*\n"
+		tableText += "```\n"
+		tableText += fmt.Sprintf("%-32s %8s %8s\n", "Team", "Added", "Removed")
+		for _, report := range rulesWithChanges {
+			teamName := report.GitHubTeam
+			if len(teamName) > 32 {
+				teamName = teamName[:29] + "..."
+			}
+			tableText += fmt.Sprintf("%-32s %8d %8d\n", teamName, len(report.MembersAdded), len(report.MembersRemoved))
 		}
-		if len(report.MembersRemoved) > 0 {
-			sectionText += fmt.Sprintf("\n*Removed:* %d members", len(report.MembersRemoved))
-		}
-		if len(report.MembersSkippedExternal) > 0 {
-			sectionText += fmt.Sprintf("\n*Skipped (External):* %d members", len(report.MembersSkippedExternal))
-		}
-		if len(report.MembersSkippedNoGHUsername) > 0 {
-			sectionText += fmt.Sprintf("\n*Skipped (No GitHub Username):* %d members", len(report.MembersSkippedNoGHUsername))
-		}
-		if len(report.Errors) > 0 {
-			sectionText += fmt.Sprintf("\n*Errors:* %d", len(report.Errors))
+		tableText += "```"
+
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", tableText, false, false),
+			nil, nil,
+		))
+	}
+
+	// list of rules without changes
+	if len(rulesWithoutChanges) > 0 {
+		blocks = append(blocks, slack.NewDividerBlock())
+
+		noChangesText := "*Rules with no changes:*\n"
+		for _, report := range rulesWithoutChanges {
+			noChangesText += fmt.Sprintf("- %s\n", report.GitHubTeam)
 		}
 
 		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", sectionText, false, false),
+			slack.NewTextBlockObject("mrkdwn", noChangesText, false, false),
 			nil, nil,
 		))
+	}
+
+	// errors section
+	if len(allErrors) > 0 {
 		blocks = append(blocks, slack.NewDividerBlock())
+
+		errorsText := "*Errors:*\n"
+		for _, err := range allErrors {
+			errorsText += fmt.Sprintf("- %s\n", err)
+		}
+
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", errorsText, false, false),
+			nil, nil,
+		))
+	}
+
+	// skipped members section
+	if len(allSkippedExternal) > 0 || len(allSkippedNoGHUsername) > 0 {
+		blocks = append(blocks, slack.NewDividerBlock())
+
+		skippedText := "*Skipped members:*\n"
+
+		if len(allSkippedExternal) > 0 {
+			skippedText += "_External collaborators:_\n"
+			for _, member := range allSkippedExternal {
+				skippedText += fmt.Sprintf("- %s\n", member)
+			}
+		}
+
+		if len(allSkippedNoGHUsername) > 0 {
+			if len(allSkippedExternal) > 0 {
+				skippedText += "\n"
+			}
+			skippedText += "_No GitHub username in Okta:_\n"
+			for _, member := range allSkippedNoGHUsername {
+				skippedText += fmt.Sprintf("- %s\n", member)
+			}
+		}
+
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", skippedText, false, false),
+			nil, nil,
+		))
 	}
 
 	_, _, err := s.client.PostMessageContext(
 		ctx,
 		s.channel,
 		slack.MsgOptionBlocks(blocks...),
-		slack.MsgOptionText("okta group sync completed", false),
+		slack.MsgOptionText(fmt.Sprintf("okta sync: %d rules, +%d/-%d members", len(reports), totalAdded, totalRemoved), false),
 	)
 
 	if err != nil {
