@@ -1,15 +1,13 @@
-// Package main provides a standard HTTP server entry point for the GitHub bot.
-// runs as a long-lived HTTP server suitable for deployment on any VPS, container,
-// or Kubernetes cluster.
 package main
 
 import (
 	"context"
-	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -39,10 +37,7 @@ func main() {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/webhooks", appInst.WebhookHandler)
-	mux.HandleFunc("/server/status", appInst.StatusHandler)
-	mux.HandleFunc("/server/config", appInst.ConfigHandler)
-	mux.HandleFunc("/scheduled/okta-sync", scheduledOktaSyncHandler)
+	mux.HandleFunc("/", httpHandler)
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -86,34 +81,41 @@ func main() {
 	logger.Info("server stopped")
 }
 
-// scheduledOktaSyncHandler handles HTTP-triggered Okta sync operations.
-// can be invoked by external cron services or schedulers.
-func scheduledOktaSyncHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+// httpHandler converts http.Request to app.Request and handles the response.
+func httpHandler(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
+	defer r.Body.Close()
 
-	evt := app.ScheduledEvent{
-		Action: "okta-sync",
+	headers := make(map[string]string)
+	for key, values := range r.Header {
+		if len(values) > 0 {
+			headers[strings.ToLower(key)] = values[0]
+		}
 	}
 
-	if err := appInst.ProcessScheduledEvent(r.Context(), evt); err != nil {
-		logger.Error("scheduled event processing failed",
-			slog.String("action", evt.Action),
-			slog.String("error", err.Error()))
-		http.Error(w, "event processing failed", http.StatusInternalServerError)
-		return
+	req := app.Request{
+		Type:    app.RequestTypeHTTP,
+		Method:  r.Method,
+		Path:    r.URL.Path,
+		Headers: headers,
+		Body:    body,
 	}
 
-	response := map[string]string{
-		"status":  "success",
-		"message": "okta sync completed",
+	resp := appInst.HandleRequest(r.Context(), req)
+
+	for key, value := range resp.Headers {
+		w.Header().Set(key, value)
+	}
+	if resp.ContentType != "" && w.Header().Get("Content-Type") == "" {
+		w.Header().Set("Content-Type", resp.ContentType)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		logger.Error("failed to encode response", slog.String("error", err.Error()))
+	w.WriteHeader(resp.StatusCode)
+	if len(resp.Body) > 0 {
+		w.Write(resp.Body)
 	}
 }

@@ -6,10 +6,10 @@ alternatives like standard HTTP servers.
 
 ## Overview
 
-The Lambda adapter translates AWS-specific events into standard application
-calls:
-- **API Gateway** (webhooks) → HTTP handlers
-- **EventBridge** (scheduled sync) → `ProcessScheduledEvent()`
+The Lambda adapter translates AWS-specific events into the unified
+`app.HandleRequest()` interface:
+- **API Gateway** (webhooks, status, config) → `app.Request{Type: HTTP}`
+- **EventBridge** (scheduled sync) → `app.Request{Type: Scheduled}`
 
 ## Build
 
@@ -83,15 +83,19 @@ Create an EventBridge rule:
 
 ### Universal Handler
 
-The Lambda function uses a universal handler that detects event types:
+The Lambda function uses a universal handler that detects event types and
+converts them to the unified `app.Request` format:
 
 ```go
 func UniversalHandler(ctx context.Context, event json.RawMessage) (any, error)
 ```
 
 **Supported Events**:
-- `APIGatewayV2HTTPRequest` → Routes to webhook/status/config handlers
-- `CloudWatchEvent` (EventBridge) → Routes to scheduled event processor
+- `APIGatewayV2HTTPRequest` → Converts to `app.Request{Type: HTTP}`
+- `CloudWatchEvent` (EventBridge) → Converts to `app.Request{Type: Scheduled}`
+
+All requests are then processed by `app.HandleRequest()` which routes based on
+request type and path.
 
 ### Endpoints
 

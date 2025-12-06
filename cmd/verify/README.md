@@ -90,14 +90,17 @@ Path matching supports wildcards (`*`) for dynamic segments like org names, repo
 ## Architecture
 
 ```
-Event → App Logic → SDK Client → Mock Server (localhost:9001-9003)
-                                       ↓
-                                  Record Request
-                                       ↓
-                                  Return Mock Response
-                                       ↓
-                            Validate Expected Calls Made
+Test Scenario → app.HandleRequest() → SDK Client → Mock Server (localhost:9001-9003)
+                                                          ↓
+                                                     Record Request
+                                                          ↓
+                                                     Return Mock Response
+                                                          ↓
+                                               Validate Expected Calls Made
 ```
+
+Tests use the unified `app.HandleRequest()` interface, ensuring the same code
+paths are exercised as production deployments.
 
 Base URLs configured via environment (all HTTPS with self-signed certs):
 - `APP_GITHUB_BASE_URL` → `https://localhost:9001/`
