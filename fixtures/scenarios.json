@@ -95,6 +95,9 @@
     "description": "Detect when PR is merged bypassing branch protection and send Slack notification",
     "event_type": "webhook",
     "webhook_type": "pull_request",
+    "config_overrides": {
+      "APP_GITHUB_WEBHOOK_SECRET": ""
+    },
     "webhook_payload": {
       "action": "closed",
       "number": 456,
@@ -222,6 +225,9 @@
     "description": "PR merged with proper approvals - no bypass",
     "event_type": "webhook",
     "webhook_type": "pull_request",
+    "config_overrides": {
+      "APP_GITHUB_WEBHOOK_SECRET": ""
+    },
     "webhook_payload": {
       "action": "closed",
       "number": 789,

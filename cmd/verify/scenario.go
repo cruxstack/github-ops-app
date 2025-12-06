@@ -178,20 +178,40 @@ func runScenario(ctx context.Context, scenario TestScenario, verbose bool, logge
 	appLogger := slog.New(&testHandler{prefix: "  ", verbose: verbose, w: os.Stdout})
 	a.Logger = appLogger
 
-	var processErr error
+	var req app.Request
 	switch scenario.EventType {
 	case "scheduled_event":
 		var evt app.ScheduledEvent
 		if err := json.Unmarshal(scenario.EventPayload, &evt); err != nil {
 			return fmt.Errorf("unmarshal event payload failed: %w", err)
 		}
-		processErr = a.ProcessScheduledEvent(ctx, evt)
+		req = app.Request{
+			Type:            app.RequestTypeScheduled,
+			ScheduledAction: evt.Action,
+			ScheduledData:   evt.Data,
+		}
 
 	case "webhook":
-		processErr = a.ProcessWebhook(ctx, scenario.WebhookPayload, scenario.WebhookType)
+		req = app.Request{
+			Type:   app.RequestTypeHTTP,
+			Method: "POST",
+			Path:   "/webhooks",
+			Headers: map[string]string{
+				"x-github-event":      scenario.WebhookType,
+				"x-hub-signature-256": "", // signature validated separately in tests
+			},
+			Body: scenario.WebhookPayload,
+		}
 
 	default:
 		return fmt.Errorf("unknown event type: %s", scenario.EventType)
+	}
+
+	resp := a.HandleRequest(ctx, req)
+
+	var processErr error
+	if resp.StatusCode >= 400 {
+		processErr = fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(resp.Body))
 	}
 
 	if scenario.ExpectError {

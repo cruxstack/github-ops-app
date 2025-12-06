@@ -122,9 +122,10 @@ APP_GITHUB_WEBHOOK_SECRET=arn:aws:ssm:us-east-1:123456789012:parameter/github-bo
 
 ### Other
 
-| Variable                 | Description                        |
-|--------------------------|------------------------------------|
-| `APP_DEBUG_ENABLED`      | Verbose logging (default: `false`) |
+| Variable                 | Description                                    |
+|--------------------------|------------------------------------------------|
+| `APP_DEBUG_ENABLED`      | Verbose logging (default: `false`)             |
+| `APP_BASE_PATH`          | URL prefix to strip (e.g., `/api/v1`)          |
 
 ### Okta Sync Rules
 

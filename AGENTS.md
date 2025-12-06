@@ -10,8 +10,8 @@
   - `cmd/verify/main.go` - Integration tests with HTTP mock servers
   - `cmd/sample/main.go` - **DO NOT RUN** (requires live credentials)
 - **Packages**:
-  - `internal/app/` - Core logic, configuration, and HTTP handlers (no AWS
-    dependencies)
+  - `internal/app/` - Core logic and unified request handling via
+    `HandleRequest()` (no AWS dependencies)
   - `internal/github/` - API client, webhooks, PR checks, team mgmt, auth
   - `internal/okta/` - API client, group sync
   - `internal/notifiers/` - Slack formatting for events and reports
