@@ -4,8 +4,10 @@ package okta
 
 import (
 	"context"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"net/http"
 
@@ -18,6 +20,45 @@ import (
 // DefaultScopes defines the required OAuth scopes for the Okta API.
 // these scopes are necessary for group sync functionality.
 var DefaultScopes = []string{"okta.groups.read", "okta.users.read"}
+
+// convertToPKCS1 converts a PEM-encoded private key to PKCS#1 format if needed.
+// the Okta SDK requires PKCS#1 format (BEGIN RSA PRIVATE KEY), but Okta's
+// console generates PKCS#8 keys (BEGIN PRIVATE KEY). this function detects the
+// format and converts PKCS#8 to PKCS#1 automatically.
+func convertToPKCS1(keyPEM []byte) ([]byte, error) {
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		return nil, errors.New("failed to decode pem block from private key")
+	}
+
+	// already in PKCS#1 format
+	if block.Type == "RSA PRIVATE KEY" {
+		return keyPEM, nil
+	}
+
+	// convert PKCS#8 to PKCS#1
+	if block.Type == "PRIVATE KEY" {
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, errors.Wrap(err, "failed to parse pkcs#8 private key")
+		}
+
+		rsaKey, ok := key.(*rsa.PrivateKey)
+		if !ok {
+			return nil, errors.New("private key is not an rsa key")
+		}
+
+		pkcs1Bytes := x509.MarshalPKCS1PrivateKey(rsaKey)
+		pkcs1PEM := pem.EncodeToMemory(&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: pkcs1Bytes,
+		})
+
+		return pkcs1PEM, nil
+	}
+
+	return nil, errors.Newf("unsupported private key type: %s", block.Type)
+}
 
 // Client wraps the Okta SDK client with custom configuration.
 type Client struct {
@@ -54,11 +95,16 @@ func NewClientWithContext(ctx context.Context, cfg *ClientConfig) (*Client, erro
 		orgURL = fmt.Sprintf("https://%s", cfg.Domain)
 	}
 
+	privateKey, err := convertToPKCS1(cfg.PrivateKey)
+	if err != nil {
+		return nil, errors.Wrap(err, "failed to convert private key")
+	}
+
 	opts := []okta.ConfigSetter{
 		okta.WithOrgUrl(orgURL),
 		okta.WithAuthorizationMode("PrivateKey"),
 		okta.WithClientId(cfg.ClientID),
-		okta.WithPrivateKey(string(cfg.PrivateKey)),
+		okta.WithPrivateKey(string(privateKey)),
 	}
 
 	if len(cfg.Scopes) > 0 {
