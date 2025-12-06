@@ -96,7 +96,7 @@ func resolveEnvValue(ctx context.Context, key, value string) (string, error) {
 	if idx == -1 {
 		return "", errors.Newf("invalid ssm parameter arn format for %s: %s", key, value)
 	}
-	paramName = paramName[idx+len(":parameter/"):]
+	paramName = "/" + paramName[idx+len(":parameter/"):]
 
 	input := &ssm.GetParameterInput{
 		Name:           &paramName,
