@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 
 	"github.com/cruxstack/github-ops-app/internal/github"
 )
@@ -82,17 +83,27 @@ func (a *App) handleScheduledRequest(ctx context.Context, req Request) Response 
 }
 
 // handleHTTPRequest routes HTTP requests based on path.
+// strips BasePath prefix if configured (e.g., "/api/v1" -> "/").
 func (a *App) handleHTTPRequest(ctx context.Context, req Request) Response {
-	switch req.Path {
+	path := req.Path
+	if a.Config.BasePath != "" {
+		path = strings.TrimPrefix(path, a.Config.BasePath)
+		if path == "" {
+			path = "/"
+		}
+	}
+
+	switch path {
 	case "/server/status":
 		return a.handleStatusRequest(req)
 	case "/server/config":
 		return a.handleConfigRequest(req)
 	case "/webhooks", "/":
 		return a.handleWebhookRequest(ctx, req)
-	case "/scheduled/okta-sync":
-		return a.handleScheduledHTTPRequest(ctx, req)
 	default:
+		if strings.HasPrefix(path, "/scheduled/") {
+			return a.handleScheduledHTTPRequest(ctx, req, path)
+		}
 		return errorResponse(404, "not found")
 	}
 }
@@ -147,15 +158,16 @@ func (a *App) handleWebhookRequest(ctx context.Context, req Request) Response {
 }
 
 // handleScheduledHTTPRequest processes scheduled events via HTTP POST.
-func (a *App) handleScheduledHTTPRequest(ctx context.Context, req Request) Response {
+// path is the normalized path with BasePath already stripped.
+func (a *App) handleScheduledHTTPRequest(ctx context.Context, req Request, path string) Response {
 	if req.Method != "POST" {
 		return errorResponse(405, "method not allowed")
 	}
 
 	// extract action from path (e.g., "/scheduled/okta-sync" -> "okta-sync")
-	action := "okta-sync"
-	if len(req.Path) > len("/scheduled/") {
-		action = req.Path[len("/scheduled/"):]
+	action := strings.TrimPrefix(path, "/scheduled/")
+	if action == "" {
+		return errorResponse(400, "missing scheduled action")
 	}
 
 	scheduledReq := Request{

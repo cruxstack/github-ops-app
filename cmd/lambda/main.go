@@ -50,14 +50,6 @@ func APIGatewayHandler(ctx context.Context, req awsevents.APIGatewayV2HTTPReques
 		logger.Debug("received api gateway request", slog.String("request", string(j)))
 	}
 
-	path := req.RawPath
-	if appInst.Config.BasePath != "" {
-		path = strings.TrimPrefix(path, appInst.Config.BasePath)
-		if path == "" {
-			path = "/"
-		}
-	}
-
 	headers := make(map[string]string)
 	for key, value := range req.Headers {
 		headers[strings.ToLower(key)] = value
@@ -66,7 +58,7 @@ func APIGatewayHandler(ctx context.Context, req awsevents.APIGatewayV2HTTPReques
 	appReq := app.Request{
 		Type:    app.RequestTypeHTTP,
 		Method:  req.RequestContext.HTTP.Method,
-		Path:    path,
+		Path:    req.RawPath,
 		Headers: headers,
 		Body:    []byte(req.Body),
 	}
