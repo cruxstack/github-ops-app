@@ -179,12 +179,21 @@ func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, err
 
 // GetAppSlug fetches the GitHub App slug identifier.
 // used to detect changes made by the app itself.
+// requires JWT authentication (not installation token).
 func (c *Client) GetAppSlug(ctx context.Context) (string, error) {
-	if err := c.ensureValidToken(ctx); err != nil {
-		return "", err
+	jwtToken, err := c.createJWT()
+	if err != nil {
+		return "", errors.Wrap(err, "failed to create jwt for app slug fetch")
 	}
 
-	app, _, err := c.client.Apps.Get(ctx, "")
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwtToken})
+	tc := oauth2.NewClient(ctx, ts)
+	appClient := github.NewClient(tc)
+	if c.baseURL != "" {
+		appClient.BaseURL, _ = appClient.BaseURL.Parse(c.baseURL)
+	}
+
+	app, _, err := appClient.Apps.Get(ctx, "")
 	if err != nil {
 		return "", errors.Wrapf(err, "failed to fetch app info for app id %d", c.appID)
 	}
