@@ -127,34 +127,47 @@ func (c *Client) GetGroupByName(name string) (*okta.Group, error) {
 	return nil, errors.Newf("group '%s' not found", name)
 }
 
+// GroupMembersResult contains the results of fetching group members.
+type GroupMembersResult struct {
+	Members                 []string
+	SkippedNoGitHubUsername []string
+}
+
 // GetGroupMembers fetches GitHub usernames for all active members of an Okta
 // group. only includes users with status "ACTIVE" to exclude
-// suspended/deprovisioned users. falls back to email if GitHub username field
-// is not set.
-func (c *Client) GetGroupMembers(groupID string) ([]string, error) {
+// suspended/deprovisioned users. skips users without a GitHub username in
+// their profile and tracks them separately.
+func (c *Client) GetGroupMembers(groupID string) (*GroupMembersResult, error) {
 	users, _, err := c.client.Group.ListGroupUsers(c.ctx, groupID, &query.Params{})
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to list members for group '%s'", groupID)
 	}
 
-	logins := make([]string, 0, len(users))
+	result := &GroupMembersResult{
+		Members:                 make([]string, 0, len(users)),
+		SkippedNoGitHubUsername: []string{},
+	}
+
 	for _, user := range users {
 		if user.Status != "ACTIVE" {
 			continue
 		}
 
-		if user.Profile != nil {
-			githubUsername := (*user.Profile)[c.githubUserField]
-			if username, ok := githubUsername.(string); ok && username != "" {
-				logins = append(logins, username)
-			} else {
-				email := (*user.Profile)["email"]
-				if emailStr, ok := email.(string); ok && emailStr != "" {
-					logins = append(logins, emailStr)
-				}
+		if user.Profile == nil {
+			continue
+		}
+
+		githubUsername := (*user.Profile)[c.githubUserField]
+		if username, ok := githubUsername.(string); ok && username != "" {
+			result.Members = append(result.Members, username)
+		} else {
+			email := (*user.Profile)["email"]
+			if emailStr, ok := email.(string); ok && emailStr != "" {
+				result.SkippedNoGitHubUsername = append(
+					result.SkippedNoGitHubUsername, emailStr)
 			}
 		}
 	}
 
-	return logins, nil
+	return result, nil
 }

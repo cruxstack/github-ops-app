@@ -29,13 +29,14 @@ type SyncRule struct {
 // SyncReport contains the results of syncing a single Okta group to GitHub
 // team.
 type SyncReport struct {
-	Rule                   string
-	OktaGroup              string
-	GitHubTeam             string
-	MembersAdded           []string
-	MembersRemoved         []string
-	MembersSkippedExternal []string
-	Errors                 []string
+	Rule                       string
+	OktaGroup                  string
+	GitHubTeam                 string
+	MembersAdded               []string
+	MembersRemoved             []string
+	MembersSkippedExternal     []string
+	MembersSkippedNoGHUsername []string
+	Errors                     []string
 }
 
 // OrphanedUsersReport contains users who are org members but not in any synced
@@ -215,10 +216,17 @@ func (s *Syncer) computeTeamName(oktaGroupName string, rule SyncRule) string {
 // creates team if missing and syncs members if enabled.
 func (s *Syncer) syncGroupToTeam(ctx context.Context, rule SyncRule, group *GroupInfo, teamName string) *SyncReport {
 	report := &SyncReport{
-		Rule:       rule.Name,
-		OktaGroup:  group.Name,
-		GitHubTeam: teamName,
-		Errors:     []string{},
+		Rule:                       rule.Name,
+		OktaGroup:                  group.Name,
+		GitHubTeam:                 teamName,
+		MembersSkippedNoGHUsername: group.SkippedNoGitHubUsername,
+		Errors:                     []string{},
+	}
+
+	if len(group.SkippedNoGitHubUsername) > 0 {
+		s.logger.Warn("okta users skipped due to missing github username",
+			slog.String("group", group.Name),
+			slog.Int("count", len(group.SkippedNoGitHubUsername)))
 	}
 
 	privacy := "closed"

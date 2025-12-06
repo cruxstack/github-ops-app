@@ -11,9 +11,10 @@ import (
 
 // GroupInfo contains Okta group details and member list.
 type GroupInfo struct {
-	ID      string
-	Name    string
-	Members []string
+	ID                      string
+	Name                    string
+	Members                 []string
+	SkippedNoGitHubUsername []string
 }
 
 // GetGroupsByPattern fetches all Okta groups matching a regex pattern.
@@ -39,15 +40,16 @@ func (c *Client) GetGroupsByPattern(pattern string) ([]*GroupInfo, error) {
 		}
 
 		if re.MatchString(group.Profile.Name) {
-			members, err := c.GetGroupMembers(group.Id)
+			result, err := c.GetGroupMembers(group.Id)
 			if err != nil {
 				continue
 			}
 
 			matched = append(matched, &GroupInfo{
-				ID:      group.Id,
-				Name:    group.Profile.Name,
-				Members: members,
+				ID:                      group.Id,
+				Name:                    group.Profile.Name,
+				Members:                 result.Members,
+				SkippedNoGitHubUsername: result.SkippedNoGitHubUsername,
 			})
 		}
 	}
@@ -62,15 +64,16 @@ func (c *Client) GetGroupInfo(groupName string) (*GroupInfo, error) {
 		return nil, err
 	}
 
-	members, err := c.GetGroupMembers(group.Id)
+	result, err := c.GetGroupMembers(group.Id)
 	if err != nil {
 		return nil, err
 	}
 
 	return &GroupInfo{
-		ID:      group.Id,
-		Name:    group.Profile.Name,
-		Members: members,
+		ID:                      group.Id,
+		Name:                    group.Profile.Name,
+		Members:                 result.Members,
+		SkippedNoGitHubUsername: result.SkippedNoGitHubUsername,
 	}, nil
 }
 
