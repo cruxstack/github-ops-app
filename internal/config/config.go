@@ -46,10 +46,13 @@ type Config struct {
 
 	OktaOrphanedUserNotifications bool
 
-	SlackEnabled bool
-	SlackToken   string
-	SlackChannel string
-	SlackAPIURL  string
+	SlackEnabled              bool
+	SlackToken                string
+	SlackChannel              string
+	SlackChannelPRBypass      string
+	SlackChannelOktaSync      string
+	SlackChannelOrphanedUsers string
+	SlackAPIURL               string
 
 	BasePath string
 }
@@ -160,18 +163,21 @@ func NewConfigWithContext(ctx context.Context) (*Config, error) {
 	}
 
 	cfg := Config{
-		DebugEnabled:            debugEnabled,
-		GitHubOrg:               os.Getenv("APP_GITHUB_ORG"),
-		GitHubWebhookSecret:     githubWebhookSecret,
-		GitHubBaseURL:           os.Getenv("APP_GITHUB_BASE_URL"),
-		OktaDomain:              os.Getenv("APP_OKTA_DOMAIN"),
-		OktaClientID:            os.Getenv("APP_OKTA_CLIENT_ID"),
-		OktaBaseURL:             os.Getenv("APP_OKTA_BASE_URL"),
-		OktaGitHubUserField:     oktaGitHubUserField,
-		OktaSyncSafetyThreshold: oktaSyncSafetyThreshold,
-		SlackToken:              slackToken,
-		SlackChannel:            os.Getenv("APP_SLACK_CHANNEL"),
-		SlackAPIURL:             os.Getenv("APP_SLACK_API_URL"),
+		DebugEnabled:              debugEnabled,
+		GitHubOrg:                 os.Getenv("APP_GITHUB_ORG"),
+		GitHubWebhookSecret:       githubWebhookSecret,
+		GitHubBaseURL:             os.Getenv("APP_GITHUB_BASE_URL"),
+		OktaDomain:                os.Getenv("APP_OKTA_DOMAIN"),
+		OktaClientID:              os.Getenv("APP_OKTA_CLIENT_ID"),
+		OktaBaseURL:               os.Getenv("APP_OKTA_BASE_URL"),
+		OktaGitHubUserField:       oktaGitHubUserField,
+		OktaSyncSafetyThreshold:   oktaSyncSafetyThreshold,
+		SlackToken:                slackToken,
+		SlackChannel:              os.Getenv("APP_SLACK_CHANNEL"),
+		SlackChannelPRBypass:      os.Getenv("APP_SLACK_CHANNEL_PR_BYPASS"),
+		SlackChannelOktaSync:      os.Getenv("APP_SLACK_CHANNEL_OKTA_SYNC"),
+		SlackChannelOrphanedUsers: os.Getenv("APP_SLACK_CHANNEL_ORPHANED_USERS"),
+		SlackAPIURL:               os.Getenv("APP_SLACK_API_URL"),
 	}
 
 	if appIDStr := os.Getenv("APP_GITHUB_APP_ID"); appIDStr != "" {
@@ -353,10 +359,13 @@ type RedactedConfig struct {
 
 	OktaOrphanedUserNotifications bool `json:"okta_orphaned_user_notifications"`
 
-	SlackEnabled bool   `json:"slack_enabled"`
-	SlackToken   string `json:"slack_token"`
-	SlackChannel string `json:"slack_channel"`
-	SlackAPIURL  string `json:"slack_api_url"`
+	SlackEnabled              bool   `json:"slack_enabled"`
+	SlackToken                string `json:"slack_token"`
+	SlackChannel              string `json:"slack_channel"`
+	SlackChannelPRBypass      string `json:"slack_channel_pr_bypass"`
+	SlackChannelOktaSync      string `json:"slack_channel_okta_sync"`
+	SlackChannelOrphanedUsers string `json:"slack_channel_orphaned_users"`
+	SlackAPIURL               string `json:"slack_api_url"`
 
 	BasePath string `json:"base_path"`
 }
@@ -400,6 +409,9 @@ func (c *Config) Redacted() RedactedConfig {
 		SlackEnabled:                  c.SlackEnabled,
 		SlackToken:                    redact(c.SlackToken),
 		SlackChannel:                  c.SlackChannel,
+		SlackChannelPRBypass:          c.SlackChannelPRBypass,
+		SlackChannelOktaSync:          c.SlackChannelOktaSync,
+		SlackChannelOrphanedUsers:     c.SlackChannelOrphanedUsers,
 		SlackAPIURL:                   c.SlackAPIURL,
 		BasePath:                      c.BasePath,
 	}
