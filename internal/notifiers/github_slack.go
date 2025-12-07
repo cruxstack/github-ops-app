@@ -37,29 +37,25 @@ func (s *SlackNotifier) NotifyPRBypass(ctx context.Context, result *github.PRCom
 		mergedBy = *result.PR.MergedBy.Login
 	}
 
+	// build merged by line with optional bypass reason
+	mergedByText := fmt.Sprintf("Merged by %s", mergedBy)
+	if result.UserHasBypass {
+		mergedByText = fmt.Sprintf("Merged by %s (%s)", mergedBy, result.UserBypassReason)
+	}
+
 	blocks := []slack.Block{
 		slack.NewHeaderBlock(
 			slack.NewTextBlockObject("plain_text", "🚨 Branch Protection Bypassed", false, false),
 		),
 		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*PR #%d*: %s", prNumber, prTitle), false, false),
+			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("<%s|%s#%d> — %s", prURL, repoFullName, prNumber, prTitle), false, false),
+			nil, nil,
+		),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", mergedByText, false, false),
 			nil, nil,
 		),
 	}
-
-	detailsFields := []*slack.TextBlockObject{
-		slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*Repository*\n%s", repoFullName), false, false),
-		slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*Branch*\n%s", result.BaseBranch), false, false),
-		slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*Merged by*\n%s", mergedBy), false, false),
-	}
-
-	if result.UserHasBypass {
-		detailsFields = append(detailsFields,
-			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*User Permission*\n%s", result.UserBypassReason), false, false),
-		)
-	}
-
-	blocks = append(blocks, slack.NewSectionBlock(nil, detailsFields, nil))
 
 	if len(result.Violations) > 0 {
 		violationText := "*Violations:*\n"
@@ -71,12 +67,6 @@ func (s *SlackNotifier) NotifyPRBypass(ctx context.Context, result *github.PRCom
 			nil, nil,
 		))
 	}
-
-	buttons := slack.NewActionBlock(
-		"actions",
-		slack.NewButtonBlockElement("view_pr", "view", slack.NewTextBlockObject("plain_text", "View PR", false, false)).WithStyle(slack.StylePrimary).WithURL(prURL),
-	)
-	blocks = append(blocks, buttons)
 
 	_, _, err := s.client.PostMessageContext(
 		ctx,
