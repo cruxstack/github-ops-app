@@ -167,7 +167,22 @@ APP_OKTA_SYNC_RULES='[
 ]'
 ```
 
-See the main README for complete sync rule documentation.
+### Rule Fields
+
+| Field                   | Description                                          |
+|-------------------------|------------------------------------------------------|
+| `name`                  | Rule identifier (for logging)                        |
+| `enabled`               | Enable/disable rule (default: `true`)                |
+| `okta_group_pattern`    | Regex to match Okta groups                           |
+| `okta_group_name`       | Exact Okta group name (alternative to pattern)       |
+| `github_team_prefix`    | Prefix for generated GitHub team names               |
+| `github_team_name`      | Exact GitHub team name (overrides pattern)           |
+| `strip_prefix`          | Remove this prefix from Okta group name              |
+| `sync_members`          | Sync members between Okta and GitHub (default: `true`)|
+| `create_team_if_missing`| Auto-create GitHub teams if they don't exist         |
+| `team_privacy`          | GitHub team visibility: `secret` or `closed`         |
+
+See the [main README](../README.md#okta-sync-rules) for additional examples.
 
 ## Verification
 

@@ -39,10 +39,11 @@ make build-server
 # run (or use systemd, Docker, Kubernetes, etc.)
 ./dist/server
 
-# server listens on PORT (default: 8080)
+# server listens on APP_PORT (default: 8080)
 # endpoints:
 #   POST /webhooks              - GitHub webhook receiver
 #   POST /scheduled/okta-sync   - Trigger Okta sync (call via cron)
+#   POST /scheduled/slack-test  - Send test notification to Slack
 #   GET  /server/status         - Health check
 #   GET  /server/config         - Config (secrets redacted)
 ```
@@ -63,6 +64,8 @@ See [cmd/lambda/README.md](cmd/lambda/README.md) for complete Lambda deployment
 instructions including API Gateway and EventBridge configuration.
 
 ## Configuration
+
+See [`.env.example`](.env.example) for a complete configuration reference.
 
 All configuration values support direct values or AWS SSM parameter references.
 For sensitive values like secrets and private keys, use SSM parameters with
@@ -115,15 +118,19 @@ APP_GITHUB_WEBHOOK_SECRET=arn:aws:ssm:us-east-1:123456789012:parameter/github-bo
 
 ### Optional: Slack
 
-| Variable                 | Description                     |
-|--------------------------|---------------------------------|
-| `APP_SLACK_TOKEN`        | Bot token (`xoxb-...`)          |
-| `APP_SLACK_CHANNEL`      | Default channel ID              |
+| Variable                          | Description                              |
+|-----------------------------------|------------------------------------------|
+| `APP_SLACK_TOKEN`                 | Bot token (`xoxb-...`)                   |
+| `APP_SLACK_CHANNEL`               | Default channel ID                       |
+| `APP_SLACK_CHANNEL_PR_BYPASS`     | Channel for PR bypass alerts (optional)  |
+| `APP_SLACK_CHANNEL_OKTA_SYNC`     | Channel for sync reports (optional)      |
+| `APP_SLACK_CHANNEL_ORPHANED_USERS`| Channel for orphan alerts (optional)     |
 
 ### Other
 
 | Variable                 | Description                                    |
 |--------------------------|------------------------------------------------|
+| `APP_PORT`               | Server port (default: `8080`)                  |
 | `APP_DEBUG_ENABLED`      | Verbose logging (default: `false`)             |
 | `APP_BASE_PATH`          | URL prefix to strip (e.g., `/api/v1`)          |
 
@@ -153,29 +160,13 @@ Map Okta groups to GitHub teams using JSON rules:
 ]
 ```
 
-**Rule Fields**:
-- `name` - Rule identifier
-- `enabled` - Enable/disable rule
-- `okta_group_pattern` - Regex to match Okta groups
-- `okta_group_name` - Exact Okta group name (alternative to pattern)
-- `github_team_prefix` - Prefix for GitHub team names
-- `github_team_name` - Exact GitHub team name (overrides pattern)
-- `strip_prefix` - Remove this prefix from Okta group name
-- `sync_members` - Sync members between Okta and GitHub
-- `create_team_if_missing` - Auto-create GitHub teams
-- `team_privacy` - `secret` or `closed`
+See [Okta Setup - Sync Rules](docs/okta-setup.md#step-10-configure-sync-rules)
+for detailed rule field documentation.
 
 **Sync Safety Features**:
-- **Active users only**: Only syncs users with `ACTIVE` status in Okta,
-  automatically excluding suspended or deprovisioned accounts
-- **External collaborator protection**: Never removes outside collaborators
-  (non-org members), preserving contractors and partner access
-- **Outage protection**: Safety threshold (default 50%) prevents mass removal
-  if Okta/GitHub is experiencing issues. Sync aborts if removal ratio exceeds
-  threshold
-- **Orphaned user detection**: Identifies organization members not in any
-  Okta-synced teams and sends Slack notifications. Enabled by default when
-  sync is enabled.
+- Only syncs `ACTIVE` Okta users; never removes outside collaborators
+- Safety threshold (default 50%) aborts sync if too many removals detected
+- Orphaned user detection alerts when org members aren't in any synced teams
 
 ## Integration Setup
 
@@ -223,44 +214,21 @@ CMD ["/server"]
 ## How It Works
 
 ```
-                              ┌─────────────────────────────────────────────────┐
-                              │              github-ops-app                     │
-                              │                                                 │
-  ┌──────────────┐            │  ┌───────────────────────────────────────────┐  │
-  │    GitHub    │ webhooks   │  │              Webhook Handler              │  │
-  │              │───────────────▶  • PR merge events                        │  │
-  │  • PR merge  │            │  │  • Team membership changes                │  │
-  │  • Team edit │            │  │  • Signature verification                 │  │
-  └──────────────┘            │  └─────────────┬─────────────────────────────┘  │
-                              │                │                                │
-                              │                ▼                                │
-                              │  ┌─────────────────────────────────────────┐    │
-                              │  │          PR Compliance Check            │    │
-  ┌──────────────┐            │  │  • Branch protection verification       │────────┐
-  │    Okta      │            │  │  • Required checks validation           │    │   │
-  │              │            │  │  • Bypass detection                     │    │   │
-  │  • Groups    │◀──────────────┴─────────────────────────────────────────┘    │   │
-  │  • Users     │            │                                                 │   │
-  └──────────────┘            │  ┌─────────────────────────────────────────┐    │   │
-        │                     │  │             Okta Sync Engine            │    │   │
-        │                     │  │  • Match groups via rules               │    │   │
-        └─────────────────────────▶  • Create/update GitHub teams          │    │   │
-                              │  │  • Sync team membership                 │    │   │
-                              │  │  • Orphaned user detection              │────────┤
-                              │  │  • Safety threshold protection          │    │   │
-  ┌──────────────┐            │  └─────────────────────────────────────────┘    │   │
-  │   GitHub     │            │                │                                │   │
-  │   Teams API  │◀─────────────────────────────────────────────────────────────┘   │
-  │              │            │                                                 │   │
-  │  • Teams     │            └─────────────────────────────────────────────────┘   │
-  │  • Members   │                                                                  │
-  └──────────────┘                                                                  │
-                              ┌──────────────┐                                      │
-                              │    Slack     │◀─────────────────────────────────────┘
-                              │              │       Notifications
-                              │  • Alerts    │       • PR violations
-                              │  • Reports   │       • Sync reports
-                              └──────────────┘       • Orphaned users
+┌────────────┐     ┌─────────────────────────────────────┐     ┌────────────┐
+│   GitHub   │────▶│           github-ops-app            │────▶│   Slack    │
+│  webhooks  │     │                                     │     │   alerts   │
+└────────────┘     │  ┌───────────────────────────────┐  │     └────────────┘
+                   │  │  PR Compliance Check          │  │
+┌────────────┐     │  │  • Verify branch protection   │  │     ┌────────────┐
+│    Okta    │────▶│  │  • Detect bypasses            │  │────▶│   GitHub   │
+│   groups   │     │  └───────────────────────────────┘  │     │  Teams API │
+└────────────┘     │                                     │     └────────────┘
+                   │  ┌───────────────────────────────┐  │
+                   │  │  Okta Sync Engine             │  │
+                   │  │  • Map groups to teams        │  │
+                   │  │  • Sync membership            │  │
+                   │  └───────────────────────────────┘  │
+                   └─────────────────────────────────────┘
 ```
 
 ### Okta Sync Flow

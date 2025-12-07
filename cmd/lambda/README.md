@@ -41,8 +41,8 @@ Upload `dist/bootstrap` to your Lambda function via:
 
 ### 3. Configure Environment Variables
 
-Set all required environment variables (see [Configuration](#configuration)
-section in main README).
+Set all required environment variables (see
+[Configuration](../../README.md#configuration) in main README).
 
 ### 4. Setup Triggers
 
@@ -101,11 +101,13 @@ request type and path.
 
 When invoked via API Gateway:
 
-| Method | Path                  | Description                       |
-|--------|-----------------------|-----------------------------------|
-| POST   | `/webhooks`           | GitHub webhook receiver           |
-| GET    | `/server/status`      | Health check and feature flags    |
-| GET    | `/server/config`      | Config inspection (secrets hidden)|
+| Method | Path                   | Description                       |
+|--------|------------------------|-----------------------------------|
+| POST   | `/webhooks`            | GitHub webhook receiver           |
+| POST   | `/scheduled/okta-sync` | Trigger Okta sync                 |
+| POST   | `/scheduled/slack-test`| Send test notification to Slack   |
+| GET    | `/server/status`       | Health check and feature flags    |
+| GET    | `/server/config`       | Config inspection (secrets hidden)|
 
 ## Monitoring
 
