@@ -13,6 +13,7 @@ import (
 	"github.com/cruxstack/github-ops-app/internal/github"
 	"github.com/cruxstack/github-ops-app/internal/notifiers"
 	"github.com/cruxstack/github-ops-app/internal/okta"
+	gh "github.com/google/go-github/v79/github"
 )
 
 // App is the main application instance containing all clients and
@@ -86,11 +87,14 @@ func (a *App) ProcessScheduledEvent(ctx context.Context, evt ScheduledEvent) err
 		a.Logger.Debug("received scheduled event", slog.String("event", string(j)))
 	}
 
-	if evt.Action == "okta-sync" {
+	switch evt.Action {
+	case "okta-sync":
 		return a.handleOktaSync(ctx)
+	case "slack-test":
+		return a.handleSlackTest(ctx)
+	default:
+		return errors.Newf("unknown scheduled action: %s", evt.Action)
 	}
-
-	return errors.Newf("unknown scheduled action: %s", evt.Action)
 }
 
 // ProcessWebhook handles incoming GitHub webhook events.
@@ -347,6 +351,95 @@ func (a *App) shouldIgnoreMembershipChange(ctx context.Context, event *github.Me
 	}
 
 	return false
+}
+
+// handleSlackTest sends test notifications to Slack with sample data.
+// useful for verifying Slack connectivity and previewing message formats.
+func (a *App) handleSlackTest(ctx context.Context) error {
+	if a.Notifier == nil {
+		return errors.New("slack is not configured")
+	}
+
+	// test 1: PR bypass notification
+	if err := a.Notifier.NotifyPRBypass(ctx, fakePRComplianceResult(), "acme-corp/demo-repo"); err != nil {
+		return errors.Wrap(err, "failed to send test pr bypass notification")
+	}
+	a.Logger.Info("sent test pr bypass notification")
+
+	// test 2: Okta sync notification
+	if err := a.Notifier.NotifyOktaSync(ctx, fakeOktaSyncReports(), "acme-corp"); err != nil {
+		return errors.Wrap(err, "failed to send test okta sync notification")
+	}
+	a.Logger.Info("sent test okta sync notification")
+
+	// test 3: Orphaned users notification
+	if err := a.Notifier.NotifyOrphanedUsers(ctx, fakeOrphanedUsersReport()); err != nil {
+		return errors.Wrap(err, "failed to send test orphaned users notification")
+	}
+	a.Logger.Info("sent test orphaned users notification")
+
+	return nil
+}
+
+// fakePRComplianceResult returns sample PR compliance data for testing.
+func fakePRComplianceResult() *github.PRComplianceResult {
+	prNumber := 42
+	prTitle := "Add new authentication feature"
+	prURL := "https://github.com/acme-corp/demo-repo/pull/42"
+	mergedByLogin := "test-user"
+
+	return &github.PRComplianceResult{
+		PR: &gh.PullRequest{
+			Number:  &prNumber,
+			Title:   &prTitle,
+			HTMLURL: &prURL,
+			MergedBy: &gh.User{
+				Login: &mergedByLogin,
+			},
+		},
+		BaseBranch:       "main",
+		UserHasBypass:    true,
+		UserBypassReason: "repository admin",
+		Violations: []github.ComplianceViolation{
+			{Type: "insufficient_reviews", Description: "required 2 approving reviews, had 0"},
+			{Type: "missing_status_check", Description: "required check 'ci/build' did not pass"},
+		},
+	}
+}
+
+// fakeOktaSyncReports returns sample Okta sync reports for testing.
+func fakeOktaSyncReports() []*okta.SyncReport {
+	return []*okta.SyncReport{
+		{
+			Rule:           "engineering-team",
+			OktaGroup:      "Engineering",
+			GitHubTeam:     "engineering",
+			MembersAdded:   []string{"alice", "bob"},
+			MembersRemoved: []string{"charlie"},
+		},
+		{
+			Rule:       "platform-team",
+			OktaGroup:  "Platform",
+			GitHubTeam: "platform",
+			// no changes
+		},
+		{
+			Rule:                       "security-team",
+			OktaGroup:                  "Security",
+			GitHubTeam:                 "security",
+			MembersAdded:               []string{"dave"},
+			MembersSkippedExternal:     []string{"external-contractor"},
+			MembersSkippedNoGHUsername: []string{"new-hire@example.com"},
+			Errors:                     []string{"failed to fetch group members: rate limited"},
+		},
+	}
+}
+
+// fakeOrphanedUsersReport returns sample orphaned users data for testing.
+func fakeOrphanedUsersReport() *okta.OrphanedUsersReport {
+	return &okta.OrphanedUsersReport{
+		OrphanedUsers: []string{"orphan-user-1", "orphan-user-2", "legacy-bot"},
+	}
 }
 
 // StatusResponse contains application status and feature flags.
