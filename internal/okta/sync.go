@@ -106,7 +106,7 @@ type SyncResult struct {
 // continues processing remaining rules even if some fail.
 func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
 	var reports []*SyncReport
-	var syncErrors []string
+	var failedRuleCount int
 
 	for _, rule := range s.rules {
 		if !rule.IsEnabled() {
@@ -115,19 +115,26 @@ func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
 
 		ruleReports, err := s.syncRule(ctx, rule)
 		if err != nil {
-			errMsg := fmt.Sprintf("rule '%s' failed: %v", rule.GetName(), err)
-			syncErrors = append(syncErrors, errMsg)
+			failedRuleCount++
 			s.logger.Error("sync rule failed",
 				slog.String("rule", rule.GetName()),
 				slog.String("error", err.Error()))
+
+			// create a report for the failed rule so error is visible
+			reports = append(reports, &SyncReport{
+				Rule:       rule.GetName(),
+				OktaGroup:  rule.OktaGroupName,
+				GitHubTeam: rule.GitHubTeamName,
+				Errors:     []string{err.Error()},
+			})
 			continue
 		}
 
 		reports = append(reports, ruleReports...)
 	}
 
-	if len(syncErrors) > 0 && len(reports) == 0 {
-		return nil, errors.Newf("all sync rules failed: %d errors", len(syncErrors))
+	if failedRuleCount > 0 && failedRuleCount == len(reports) {
+		return nil, errors.Newf("all sync rules failed: %d errors", failedRuleCount)
 	}
 
 	return &SyncResult{

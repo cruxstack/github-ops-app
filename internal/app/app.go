@@ -133,7 +133,7 @@ func (a *App) handleOktaSync(ctx context.Context) error {
 	a.Logger.Info("okta sync completed", slog.Int("report_count", len(syncResult.Reports)))
 
 	if a.Notifier != nil {
-		if err := a.Notifier.NotifyOktaSync(ctx, syncResult.Reports); err != nil {
+		if err := a.Notifier.NotifyOktaSync(ctx, syncResult.Reports, a.Config.GitHubOrg); err != nil {
 			a.Logger.Warn("failed to send slack notification", slog.String("error", err.Error()))
 		}
 	}
