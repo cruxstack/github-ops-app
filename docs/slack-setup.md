@@ -15,46 +15,15 @@ This guide walks through creating a Slack app for github-ops-app notifications.
 2. Click **Create New App**
 3. Select **From an app manifest**
 4. Select your workspace
-5. Paste the manifest from `assets/slack/manifest.json`:
-
-   ```json
-   {
-     "display_information": {
-       "name": "GitHub Bot",
-       "description": "GitHub automation bot with Okta sync and PR compliance monitoring",
-       "background_color": "#24292e"
-     },
-     "features": {
-       "bot_user": {
-         "display_name": "GitHub Bot",
-         "always_online": false
-       }
-     },
-     "oauth_config": {
-       "scopes": {
-         "bot": [
-           "channels:join",
-           "channels:read",
-           "chat:write.public",
-           "chat:write"
-         ]
-       }
-     },
-     "settings": {
-       "org_deploy_enabled": false,
-       "socket_mode_enabled": false,
-       "token_rotation_enabled": false
-     }
-   }
-   ```
-
+5. Copy the contents of [`assets/slack/manifest.json`](../assets/slack/manifest.json)
+   and paste into the manifest editor
 6. Click **Create**
 
 ### Option B: Manual Setup
 
 1. Go to [api.slack.com/apps](https://api.slack.com/apps)
 2. Click **Create New App** → **From scratch**
-3. Enter app name: `GitHub Bot`
+3. Enter app name: `GitHub Ops Bot`
 4. Select your workspace
 5. Click **Create App**
 
@@ -128,7 +97,7 @@ curl -H "Authorization: Bearer xoxb-your-token" \
 For private channels, you must invite the bot:
 
 1. Open the private channel
-2. Type `/invite @GitHub Bot` (or your bot's display name)
+2. Type `/invite @GitHub Ops Bot` (or your bot's display name)
 3. Or click the channel name → **Integrations** → **Add apps**
 
 Public channels work without invitation when using `chat:write.public`.
@@ -139,6 +108,11 @@ Public channels work without invitation when using `chat:write.public`.
 # Required Slack configuration
 APP_SLACK_TOKEN=xoxb-1234567890-...
 APP_SLACK_CHANNEL=C01ABC2DEFG
+
+# Optional: per-notification-type channels (override APP_SLACK_CHANNEL)
+APP_SLACK_CHANNEL_PR_BYPASS=C01234ABCDE
+APP_SLACK_CHANNEL_OKTA_SYNC=C01234ABCDE
+APP_SLACK_CHANNEL_ORPHANED_USERS=C01234ABCDE
 ```
 
 For AWS deployments, use SSM parameters:
@@ -153,10 +127,10 @@ Make notifications more recognizable:
 
 1. Go to **Basic Information**
 2. Under **Display Information**:
-   - **App name**: `GitHub Bot` (or your preference)
+   - **App name**: `GitHub Ops Bot` (or your preference)
    - **Short description**: Brief description of the bot
-   - **App icon**: Upload a custom icon (recommended: GitHub logo variant)
-   - **Background color**: `#24292e` (GitHub dark) or your brand color
+   - **App icon**: Upload a custom icon (use `assets/slack/icon.png` or your own)
+   - **Background color**: `#10203B` or your brand color
 
 ## Verification
 
