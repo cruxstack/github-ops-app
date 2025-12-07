@@ -1,5 +1,6 @@
-// Package github provides webhook event parsing and signature validation.
-package github
+// Package webhooks provides GitHub webhook event parsing and signature
+// validation. Supports pull_request, team, and membership event types.
+package webhooks
 
 import (
 	"crypto/hmac"

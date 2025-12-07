@@ -1,22 +1,21 @@
-// Package notifiers provides Slack notification formatting for GitHub and
-// Okta events.
 package notifiers
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/cruxstack/github-ops-app/internal/errors"
-	"github.com/cruxstack/github-ops-app/internal/github"
+	"github.com/cockroachdb/errors"
+	internalerrors "github.com/cruxstack/github-ops-app/internal/errors"
+	"github.com/cruxstack/github-ops-app/internal/github/client"
 	"github.com/cruxstack/github-ops-app/internal/okta"
 	"github.com/slack-go/slack"
 )
 
 // NotifyPRBypass sends a Slack notification when branch protection is
 // bypassed.
-func (s *SlackNotifier) NotifyPRBypass(ctx context.Context, result *github.PRComplianceResult, repoFullName string) error {
+func (s *SlackNotifier) NotifyPRBypass(ctx context.Context, result *client.PRComplianceResult, repoFullName string) error {
 	if result.PR == nil {
-		return fmt.Errorf("%w: pr result missing", errors.ErrMissingPRData)
+		return errors.Wrap(internalerrors.ErrMissingPRData, "pr result missing")
 	}
 
 	prURL := ""
@@ -77,7 +76,7 @@ func (s *SlackNotifier) NotifyPRBypass(ctx context.Context, result *github.PRCom
 	)
 
 	if err != nil {
-		return fmt.Errorf("failed to post pr bypass notification to slack: %w", err)
+		return errors.Wrap(err, "failed to post pr bypass notification to slack")
 	}
 
 	return nil
@@ -225,7 +224,7 @@ func (s *SlackNotifier) NotifyOktaSync(ctx context.Context, reports []*okta.Sync
 	)
 
 	if err != nil {
-		return fmt.Errorf("failed to post okta sync notification to slack: %w", err)
+		return errors.Wrap(err, "failed to post okta sync notification to slack")
 	}
 
 	return nil
@@ -274,7 +273,7 @@ func (s *SlackNotifier) NotifyOrphanedUsers(ctx context.Context, report *okta.Or
 	)
 
 	if err != nil {
-		return fmt.Errorf("failed to post orphaned users notification to slack: %w", err)
+		return errors.Wrap(err, "failed to post orphaned users notification to slack")
 	}
 
 	return nil

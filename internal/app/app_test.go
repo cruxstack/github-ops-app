@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/cruxstack/github-ops-app/internal/config"
-	"github.com/cruxstack/github-ops-app/internal/github"
+	"github.com/cruxstack/github-ops-app/internal/github/client"
 	"github.com/cruxstack/github-ops-app/internal/okta"
 )
 
@@ -161,7 +161,7 @@ func TestProcessScheduledEvent_UnknownAction(t *testing.T) {
 // verify fake data types match expected interfaces
 func TestFakeDataTypes(t *testing.T) {
 	// ensure fake PR result is compatible with notifier
-	var _ *github.PRComplianceResult = fakePRComplianceResult()
+	var _ *client.PRComplianceResult = fakePRComplianceResult()
 
 	// ensure fake sync reports are compatible with notifier
 	var _ []*okta.SyncReport = fakeOktaSyncReports()

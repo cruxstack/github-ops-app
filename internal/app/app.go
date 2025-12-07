@@ -10,7 +10,8 @@ import (
 	"github.com/cockroachdb/errors"
 	"github.com/cruxstack/github-ops-app/internal/config"
 	internalerrors "github.com/cruxstack/github-ops-app/internal/errors"
-	"github.com/cruxstack/github-ops-app/internal/github"
+	"github.com/cruxstack/github-ops-app/internal/github/client"
+	"github.com/cruxstack/github-ops-app/internal/github/webhooks"
 	"github.com/cruxstack/github-ops-app/internal/notifiers"
 	"github.com/cruxstack/github-ops-app/internal/okta"
 	gh "github.com/google/go-github/v79/github"
@@ -21,7 +22,7 @@ import (
 type App struct {
 	Config       *config.Config
 	Logger       *slog.Logger
-	GitHubClient *github.Client
+	GitHubClient *client.Client
 	OktaClient   *okta.Client
 	Notifier     *notifiers.SlackNotifier
 }
@@ -37,9 +38,9 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	}
 
 	if cfg.IsGitHubConfigured() {
-		ghClient, err := github.NewAppClientWithBaseURL(
+		ghClient, err := client.NewAppClientWithBaseURL(
 			cfg.GitHubAppID,
-			cfg.GitHubInstallID,
+			cfg.GitHubInstallationID,
 			cfg.GitHubAppPrivateKey,
 			cfg.GitHubOrg,
 			cfg.GitHubBaseURL,
@@ -174,7 +175,7 @@ func (a *App) handleOktaSync(ctx context.Context) error {
 // handlePullRequestWebhook processes GitHub pull request webhook events.
 // checks merged PRs for branch protection compliance violations.
 func (a *App) handlePullRequestWebhook(ctx context.Context, payload []byte) error {
-	prEvent, err := github.ParsePullRequestEvent(payload)
+	prEvent, err := webhooks.ParsePullRequestEvent(payload)
 	if err != nil {
 		return err
 	}
@@ -196,8 +197,8 @@ func (a *App) handlePullRequestWebhook(ctx context.Context, payload []byte) erro
 
 	ghClient := a.GitHubClient
 
-	if prEvent.GetInstallationID() != 0 && prEvent.GetInstallationID() != a.Config.GitHubInstallID {
-		installClient, err := github.NewAppClientWithBaseURL(
+	if prEvent.GetInstallationID() != 0 && prEvent.GetInstallationID() != a.Config.GitHubInstallationID {
+		installClient, err := client.NewAppClientWithBaseURL(
 			a.Config.GitHubAppID,
 			prEvent.GetInstallationID(),
 			a.Config.GitHubAppPrivateKey,
@@ -243,7 +244,7 @@ func (a *App) handlePullRequestWebhook(ctx context.Context, payload []byte) erro
 // handleTeamWebhook processes GitHub team webhook events.
 // triggers Okta sync when team changes are made externally.
 func (a *App) handleTeamWebhook(ctx context.Context, payload []byte) error {
-	teamEvent, err := github.ParseTeamEvent(payload)
+	teamEvent, err := webhooks.ParseTeamEvent(payload)
 	if err != nil {
 		return err
 	}
@@ -255,7 +256,7 @@ func (a *App) handleTeamWebhook(ctx context.Context, payload []byte) error {
 		return nil
 	}
 
-	if a.shouldIgnoreTeamChange(ctx, teamEvent) {
+	if a.shouldIgnoreWebhookChange(ctx, teamEvent) {
 		if a.Config.DebugEnabled {
 			a.Logger.Debug("ignoring team change from bot/app",
 				slog.String("action", teamEvent.Action),
@@ -275,7 +276,7 @@ func (a *App) handleTeamWebhook(ctx context.Context, payload []byte) error {
 // handleMembershipWebhook processes GitHub membership webhook events.
 // triggers Okta sync when team memberships are changed externally.
 func (a *App) handleMembershipWebhook(ctx context.Context, payload []byte) error {
-	membershipEvent, err := github.ParseMembershipEvent(payload)
+	membershipEvent, err := webhooks.ParseMembershipEvent(payload)
 	if err != nil {
 		return err
 	}
@@ -294,7 +295,7 @@ func (a *App) handleMembershipWebhook(ctx context.Context, payload []byte) error
 		return nil
 	}
 
-	if a.shouldIgnoreMembershipChange(ctx, membershipEvent) {
+	if a.shouldIgnoreWebhookChange(ctx, membershipEvent) {
 		if a.Config.DebugEnabled {
 			a.Logger.Debug("ignoring membership change from bot/app",
 				slog.String("action", membershipEvent.Action),
@@ -312,35 +313,16 @@ func (a *App) handleMembershipWebhook(ctx context.Context, payload []byte) error
 	return a.handleOktaSync(ctx)
 }
 
-// shouldIgnoreTeamChange checks if a team webhook should be ignored.
-// ignores changes made by bots or the GitHub App itself to prevent loops.
-func (a *App) shouldIgnoreTeamChange(ctx context.Context, event *github.TeamEvent) bool {
-	senderType := event.GetSenderType()
-	if senderType == "Bot" {
-		return true
-	}
-
-	if a.GitHubClient != nil {
-		appSlug, err := a.GitHubClient.GetAppSlug(ctx)
-		if err != nil {
-			a.Logger.Warn("failed to get app slug", slog.String("error", err.Error()))
-			return false
-		}
-		senderLogin := event.GetSenderLogin()
-		if senderLogin == appSlug+"[bot]" {
-			return true
-		}
-	}
-
-	return false
+// webhookSender provides sender information for webhook events.
+type webhookSender interface {
+	GetSenderType() string
+	GetSenderLogin() string
 }
 
-// shouldIgnoreMembershipChange checks if a membership webhook should be
-// ignored. ignores changes made by bots or the GitHub App itself to prevent
-// loops.
-func (a *App) shouldIgnoreMembershipChange(ctx context.Context, event *github.MembershipEvent) bool {
-	senderType := event.GetSenderType()
-	if senderType == "Bot" {
+// shouldIgnoreWebhookChange checks if a webhook should be ignored.
+// ignores changes made by bots or the GitHub App itself to prevent loops.
+func (a *App) shouldIgnoreWebhookChange(ctx context.Context, event webhookSender) bool {
+	if event.GetSenderType() == "Bot" {
 		return true
 	}
 
@@ -350,8 +332,7 @@ func (a *App) shouldIgnoreMembershipChange(ctx context.Context, event *github.Me
 			a.Logger.Warn("failed to get app slug", slog.String("error", err.Error()))
 			return false
 		}
-		senderLogin := event.GetSenderLogin()
-		if senderLogin == appSlug+"[bot]" {
+		if event.GetSenderLogin() == appSlug+"[bot]" {
 			return true
 		}
 	}
@@ -388,13 +369,13 @@ func (a *App) handleSlackTest(ctx context.Context) error {
 }
 
 // fakePRComplianceResult returns sample PR compliance data for testing.
-func fakePRComplianceResult() *github.PRComplianceResult {
+func fakePRComplianceResult() *client.PRComplianceResult {
 	prNumber := 42
 	prTitle := "Add new authentication feature"
 	prURL := "https://github.com/acme-corp/demo-repo/pull/42"
 	mergedByLogin := "test-user"
 
-	return &github.PRComplianceResult{
+	return &client.PRComplianceResult{
 		PR: &gh.PullRequest{
 			Number:  &prNumber,
 			Title:   &prTitle,
@@ -406,7 +387,7 @@ func fakePRComplianceResult() *github.PRComplianceResult {
 		BaseBranch:       "main",
 		UserHasBypass:    true,
 		UserBypassReason: "repository admin",
-		Violations: []github.ComplianceViolation{
+		Violations: []client.ComplianceViolation{
 			{Type: "insufficient_reviews", Description: "required 2 approving reviews, had 0"},
 			{Type: "missing_status_check", Description: "required check 'ci/build' did not pass"},
 		},

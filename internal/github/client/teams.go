@@ -1,5 +1,4 @@
-// Package github provides GitHub team management and membership sync.
-package github
+package client
 
 import (
 	"context"

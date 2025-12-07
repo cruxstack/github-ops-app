@@ -1,5 +1,5 @@
-// Package okta provides Okta API client with OAuth 2.0 private key
-// authentication.
+// Package okta provides Okta API client and group synchronization to GitHub
+// teams. Uses OAuth 2.0 with private key authentication.
 package okta
 
 import (
