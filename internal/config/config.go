@@ -15,37 +15,41 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/cockroachdb/errors"
-	"github.com/cruxstack/github-ops-app/internal/okta"
+	"github.com/cruxstack/github-ops-app/internal/types"
 )
 
 // Config holds all application configuration loaded from environment
 // variables.
 type Config struct {
+	// General
 	DebugEnabled bool
+	BasePath     string
 
-	GitHubOrg           string
-	GitHubWebhookSecret string
-	GitHubBaseURL       string
+	// GitHub App
+	GitHubOrg            string
+	GitHubAppID          int64
+	GitHubAppPrivateKey  []byte
+	GitHubInstallationID int64
+	GitHubWebhookSecret  string
+	GitHubBaseURL        string
 
-	GitHubAppID         int64
-	GitHubAppPrivateKey []byte
-	GitHubInstallID     int64
-
-	OktaDomain              string
-	OktaClientID            string
-	OktaPrivateKey          []byte
-	OktaPrivateKeyID        string
-	OktaScopes              []string
-	OktaBaseURL             string
-	OktaSyncRules           []okta.SyncRule
-	OktaGitHubUserField     string
-	OktaSyncSafetyThreshold float64
-
+	// PR Compliance
 	PRComplianceEnabled bool
 	PRMonitoredBranches []string
 
+	// Okta
+	OktaDomain                    string
+	OktaClientID                  string
+	OktaPrivateKey                []byte
+	OktaPrivateKeyID              string
+	OktaScopes                    []string
+	OktaBaseURL                   string
+	OktaGitHubUserField           string
+	OktaSyncRules                 []types.SyncRule
+	OktaSyncSafetyThreshold       float64
 	OktaOrphanedUserNotifications bool
 
+	// Slack
 	SlackEnabled              bool
 	SlackToken                string
 	SlackChannel              string
@@ -53,8 +57,6 @@ type Config struct {
 	SlackChannelOktaSync      string
 	SlackChannelOrphanedUsers string
 	SlackAPIURL               string
-
-	BasePath string
 }
 
 var (
@@ -205,7 +207,7 @@ func NewConfigWithContext(ctx context.Context) (*Config, error) {
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to parse APP_GITHUB_INSTALLATION_ID '%s'", installIDStr)
 		}
-		cfg.GitHubInstallID = installID
+		cfg.GitHubInstallationID = installID
 	}
 
 	if privateKeyPath := os.Getenv("APP_OKTA_PRIVATE_KEY_PATH"); privateKeyPath != "" {
@@ -229,7 +231,7 @@ func NewConfigWithContext(ctx context.Context) (*Config, error) {
 		}
 		cfg.OktaScopes = scopes
 	} else {
-		cfg.OktaScopes = okta.DefaultScopes
+		cfg.OktaScopes = []string{"okta.groups.read", "okta.users.read"}
 	}
 
 	prComplianceEnabled, _ := strconv.ParseBool(os.Getenv("APP_PR_COMPLIANCE_ENABLED"))
@@ -248,7 +250,7 @@ func NewConfigWithContext(ctx context.Context) (*Config, error) {
 
 	syncRulesJSON := os.Getenv("APP_OKTA_SYNC_RULES")
 	if syncRulesJSON != "" {
-		var rules []okta.SyncRule
+		var rules []types.SyncRule
 		if err := json.Unmarshal([]byte(syncRulesJSON), &rules); err != nil {
 			return nil, errors.Wrap(err, "failed to parse APP_OKTA_SYNC_RULES")
 		}
@@ -313,7 +315,7 @@ func (c *Config) IsGitHubConfigured() bool {
 	return c.GitHubOrg != "" &&
 		c.GitHubAppID != 0 &&
 		len(c.GitHubAppPrivateKey) > 0 &&
-		c.GitHubInstallID != 0
+		c.GitHubInstallationID != 0
 }
 
 // ShouldMonitorBranch returns true if the given branch should be monitored
@@ -334,31 +336,35 @@ func (c *Config) ShouldMonitorBranch(branch string) bool {
 // RedactedConfig contains configuration with sensitive values redacted.
 // safe for logging and API responses.
 type RedactedConfig struct {
-	DebugEnabled bool `json:"debug_enabled"`
+	// General
+	DebugEnabled bool   `json:"debug_enabled"`
+	BasePath     string `json:"base_path"`
 
-	GitHubOrg           string `json:"github_org"`
-	GitHubWebhookSecret string `json:"github_webhook_secret"`
-	GitHubBaseURL       string `json:"github_base_url"`
+	// GitHub App
+	GitHubOrg            string `json:"github_org"`
+	GitHubAppID          int64  `json:"github_app_id"`
+	GitHubAppPrivateKey  string `json:"github_app_private_key"`
+	GitHubInstallationID int64  `json:"github_installation_id"`
+	GitHubWebhookSecret  string `json:"github_webhook_secret"`
+	GitHubBaseURL        string `json:"github_base_url"`
 
-	GitHubAppID         int64  `json:"github_app_id"`
-	GitHubAppPrivateKey string `json:"github_app_private_key"`
-	GitHubInstallID     int64  `json:"github_install_id"`
-
-	OktaDomain              string          `json:"okta_domain"`
-	OktaClientID            string          `json:"okta_client_id"`
-	OktaPrivateKey          string          `json:"okta_private_key"`
-	OktaPrivateKeyID        string          `json:"okta_private_key_id"`
-	OktaScopes              []string        `json:"okta_scopes"`
-	OktaBaseURL             string          `json:"okta_base_url"`
-	OktaSyncRules           []okta.SyncRule `json:"okta_sync_rules"`
-	OktaGitHubUserField     string          `json:"okta_github_user_field"`
-	OktaSyncSafetyThreshold float64         `json:"okta_sync_safety_threshold"`
-
+	// PR Compliance
 	PRComplianceEnabled bool     `json:"pr_compliance_enabled"`
 	PRMonitoredBranches []string `json:"pr_monitored_branches"`
 
-	OktaOrphanedUserNotifications bool `json:"okta_orphaned_user_notifications"`
+	// Okta
+	OktaDomain                    string           `json:"okta_domain"`
+	OktaClientID                  string           `json:"okta_client_id"`
+	OktaPrivateKey                string           `json:"okta_private_key"`
+	OktaPrivateKeyID              string           `json:"okta_private_key_id"`
+	OktaScopes                    []string         `json:"okta_scopes"`
+	OktaBaseURL                   string           `json:"okta_base_url"`
+	OktaGitHubUserField           string           `json:"okta_github_user_field"`
+	OktaSyncRules                 []types.SyncRule `json:"okta_sync_rules"`
+	OktaSyncSafetyThreshold       float64          `json:"okta_sync_safety_threshold"`
+	OktaOrphanedUserNotifications bool             `json:"okta_orphaned_user_notifications"`
 
+	// Slack
 	SlackEnabled              bool   `json:"slack_enabled"`
 	SlackToken                string `json:"slack_token"`
 	SlackChannel              string `json:"slack_channel"`
@@ -366,8 +372,6 @@ type RedactedConfig struct {
 	SlackChannelOktaSync      string `json:"slack_channel_okta_sync"`
 	SlackChannelOrphanedUsers string `json:"slack_channel_orphaned_users"`
 	SlackAPIURL               string `json:"slack_api_url"`
-
-	BasePath string `json:"base_path"`
 }
 
 // Redacted returns a copy of the config with secrets redacted.
@@ -387,32 +391,41 @@ func (c *Config) Redacted() RedactedConfig {
 	}
 
 	return RedactedConfig{
-		DebugEnabled:                  c.DebugEnabled,
-		GitHubOrg:                     c.GitHubOrg,
-		GitHubWebhookSecret:           redact(c.GitHubWebhookSecret),
-		GitHubBaseURL:                 c.GitHubBaseURL,
-		GitHubAppID:                   c.GitHubAppID,
-		GitHubAppPrivateKey:           redactBytes(c.GitHubAppPrivateKey),
-		GitHubInstallID:               c.GitHubInstallID,
+		// General
+		DebugEnabled: c.DebugEnabled,
+		BasePath:     c.BasePath,
+
+		// GitHub App
+		GitHubOrg:            c.GitHubOrg,
+		GitHubAppID:          c.GitHubAppID,
+		GitHubAppPrivateKey:  redactBytes(c.GitHubAppPrivateKey),
+		GitHubInstallationID: c.GitHubInstallationID,
+		GitHubWebhookSecret:  redact(c.GitHubWebhookSecret),
+		GitHubBaseURL:        c.GitHubBaseURL,
+
+		// PR Compliance
+		PRComplianceEnabled: c.PRComplianceEnabled,
+		PRMonitoredBranches: c.PRMonitoredBranches,
+
+		// Okta
 		OktaDomain:                    c.OktaDomain,
 		OktaClientID:                  redact(c.OktaClientID),
 		OktaPrivateKey:                redactBytes(c.OktaPrivateKey),
 		OktaPrivateKeyID:              c.OktaPrivateKeyID,
 		OktaScopes:                    c.OktaScopes,
 		OktaBaseURL:                   c.OktaBaseURL,
-		OktaSyncRules:                 c.OktaSyncRules,
 		OktaGitHubUserField:           c.OktaGitHubUserField,
+		OktaSyncRules:                 c.OktaSyncRules,
 		OktaSyncSafetyThreshold:       c.OktaSyncSafetyThreshold,
-		PRComplianceEnabled:           c.PRComplianceEnabled,
-		PRMonitoredBranches:           c.PRMonitoredBranches,
 		OktaOrphanedUserNotifications: c.OktaOrphanedUserNotifications,
-		SlackEnabled:                  c.SlackEnabled,
-		SlackToken:                    redact(c.SlackToken),
-		SlackChannel:                  c.SlackChannel,
-		SlackChannelPRBypass:          c.SlackChannelPRBypass,
-		SlackChannelOktaSync:          c.SlackChannelOktaSync,
-		SlackChannelOrphanedUsers:     c.SlackChannelOrphanedUsers,
-		SlackAPIURL:                   c.SlackAPIURL,
-		BasePath:                      c.BasePath,
+
+		// Slack
+		SlackEnabled:              c.SlackEnabled,
+		SlackToken:                redact(c.SlackToken),
+		SlackChannel:              c.SlackChannel,
+		SlackChannelPRBypass:      c.SlackChannelPRBypass,
+		SlackChannelOktaSync:      c.SlackChannelOktaSync,
+		SlackChannelOrphanedUsers: c.SlackChannelOrphanedUsers,
+		SlackAPIURL:               c.SlackAPIURL,
 	}
 }

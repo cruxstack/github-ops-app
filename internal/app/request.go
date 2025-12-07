@@ -1,4 +1,3 @@
-// Package app provides unified request/response handling for all runtimes.
 package app
 
 import (
@@ -7,7 +6,7 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/cruxstack/github-ops-app/internal/github"
+	"github.com/cruxstack/github-ops-app/internal/github/webhooks"
 )
 
 // RequestType identifies the category of incoming request.
@@ -133,7 +132,7 @@ func (a *App) handleWebhookRequest(ctx context.Context, req Request) Response {
 	eventType := req.Headers["x-github-event"]
 	signature := req.Headers["x-hub-signature-256"]
 
-	if err := github.ValidateWebhookSignature(
+	if err := webhooks.ValidateWebhookSignature(
 		req.Body,
 		signature,
 		a.Config.GitHubWebhookSecret,

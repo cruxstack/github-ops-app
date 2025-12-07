@@ -39,7 +39,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", httpHandler)
 
-	port := os.Getenv("PORT")
+	port := os.Getenv("APP_PORT")
 	if port == "" {
 		port = "8080"
 	}

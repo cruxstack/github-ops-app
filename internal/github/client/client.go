@@ -1,7 +1,7 @@
-// Package github provides GitHub API client with App authentication.
-// handles JWT generation, installation token management, and automatic token
-// refresh.
-package github
+// Package client provides a GitHub API client with App authentication.
+// Handles JWT generation, installation token management, PR compliance
+// checking, and team membership synchronization.
+package client
 
 import (
 	"context"

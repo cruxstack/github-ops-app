@@ -1,4 +1,3 @@
-// Package okta provides Okta group querying and filtering.
 package okta
 
 import (

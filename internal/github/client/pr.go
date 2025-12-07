@@ -1,6 +1,4 @@
-// Package github provides PR compliance checking against branch protection
-// rules.
-package github
+package client
 
 import (
 	"context"
@@ -189,11 +187,11 @@ func (c *Client) checkUserBypassPermission(ctx context.Context, owner, repo stri
 	}
 
 	if permissionLevel.Permission != nil {
-		perm := *permissionLevel.Permission
-		if perm == "admin" {
+		switch perm := *permissionLevel.Permission; perm {
+		case "admin":
 			result.UserHasBypass = true
 			result.UserBypassReason = "repository admin"
-		} else if perm == "maintain" {
+		case "maintain":
 			result.UserHasBypass = true
 			result.UserBypassReason = "repository maintainer"
 		}

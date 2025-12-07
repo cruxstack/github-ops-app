@@ -1,4 +1,4 @@
-// Package notifiers provides Slack notification formatting and sending.
+// Package notifiers provides Slack notification formatting and delivery.
 package notifiers
 
 import (
