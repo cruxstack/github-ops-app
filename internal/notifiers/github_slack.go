@@ -68,9 +68,10 @@ func (s *SlackNotifier) NotifyPRBypass(ctx context.Context, result *github.PRCom
 		))
 	}
 
+	channel := s.channelFor(s.channels.PRBypass)
 	_, _, err := s.client.PostMessageContext(
 		ctx,
-		s.channel,
+		channel,
 		slack.MsgOptionBlocks(blocks...),
 		slack.MsgOptionText(fmt.Sprintf("branch protection bypassed on pr #%d", prNumber), false),
 	)
@@ -215,9 +216,10 @@ func (s *SlackNotifier) NotifyOktaSync(ctx context.Context, reports []*okta.Sync
 		))
 	}
 
+	channel := s.channelFor(s.channels.OktaSync)
 	_, _, err := s.client.PostMessageContext(
 		ctx,
-		s.channel,
+		channel,
 		slack.MsgOptionBlocks(blocks...),
 		slack.MsgOptionText(fmt.Sprintf("okta sync: %d rules, +%d/-%d members", len(reports), totalAdded, totalRemoved), false),
 	)
@@ -263,9 +265,10 @@ func (s *SlackNotifier) NotifyOrphanedUsers(ctx context.Context, report *okta.Or
 		slack.NewTextBlockObject("mrkdwn", "_These users may need to be added to Okta groups or removed from the organization._", false, false),
 	))
 
+	channel := s.channelFor(s.channels.OrphanedUsers)
 	_, _, err := s.client.PostMessageContext(
 		ctx,
-		s.channel,
+		channel,
 		slack.MsgOptionBlocks(blocks...),
 		slack.MsgOptionText(fmt.Sprintf("orphaned github users detected: %d users", len(report.OrphanedUsers)), false),
 	)

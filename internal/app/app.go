@@ -67,7 +67,13 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 	}
 
 	if cfg.SlackEnabled {
-		app.Notifier = notifiers.NewSlackNotifierWithAPIURL(cfg.SlackToken, cfg.SlackChannel, cfg.SlackAPIURL)
+		channels := notifiers.SlackChannels{
+			Default:       cfg.SlackChannel,
+			PRBypass:      cfg.SlackChannelPRBypass,
+			OktaSync:      cfg.SlackChannelOktaSync,
+			OrphanedUsers: cfg.SlackChannelOrphanedUsers,
+		}
+		app.Notifier = notifiers.NewSlackNotifierWithAPIURL(cfg.SlackToken, channels, cfg.SlackAPIURL)
 	}
 
 	return app, nil
