@@ -76,7 +76,30 @@ On the **General** tab, find and save:
 These scopes allow read-only access to groups and users - no write access to
 Okta is required.
 
-## Step 6: Identify Your Okta Domain
+## Step 6: Assign Admin Role
+
+API Services applications require an admin role to access Okta APIs. Without
+this, API calls will fail with permission errors even if scopes are granted.
+
+1. Go to the **Admin roles** tab for your application
+2. Click **Edit assignments**
+3. Select one of the following roles:
+
+   | Role                | Access Level                                  |
+   |---------------------|-----------------------------------------------|
+   | **Read Only Admin** | Read access to all resources (recommended)    |
+   | **Group Admin**     | Full access to groups only                    |
+
+4. If using **Group Admin**, optionally restrict to specific groups:
+   - Under **Edit constraints for Group Administrator**, select specific
+     groups or group types the app can access
+5. Click **Save changes**
+
+> **Note**: Read Only Admin is recommended for sync operations since it
+> provides sufficient access without write permissions. Group Admin is an
+> alternative if you need to limit the app's scope to group resources only.
+
+## Step 7: Identify Your Okta Domain
 
 Your Okta domain is the URL you use to access the admin console:
 
@@ -85,7 +108,7 @@ Your Okta domain is the URL you use to access the admin console:
 
 Use the domain without `https://` prefix for `APP_OKTA_DOMAIN`.
 
-## Step 7: Configure User Profile Field
+## Step 8: Configure User Profile Field
 
 The app needs to map Okta users to GitHub usernames. Determine which Okta user
 profile field contains GitHub usernames:
@@ -111,7 +134,7 @@ profile field contains GitHub usernames:
 
 Then set `APP_OKTA_GITHUB_USER_FIELD=githubUsername`.
 
-## Step 8: Prepare Okta Groups
+## Step 9: Prepare Okta Groups
 
 Ensure your Okta groups follow a naming convention that can be matched by sync
 rules:
@@ -129,7 +152,7 @@ Groups can be:
 - Groups synced from Active Directory
 - Groups from other identity providers
 
-## Step 9: Configure Environment Variables
+## Step 10: Configure Environment Variables
 
 ```bash
 # Required Okta configuration
@@ -149,7 +172,7 @@ APP_OKTA_PRIVATE_KEY_PATH=/path/to/okta-private-key.pem
 APP_OKTA_PRIVATE_KEY=arn:aws:ssm:us-east-1:123456789:parameter/github-bot/okta-key
 ```
 
-## Step 10: Configure Sync Rules
+## Step 11: Configure Sync Rules
 
 Define how Okta groups map to GitHub teams:
 
