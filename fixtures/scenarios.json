@@ -69,7 +69,7 @@
         "method": "GET",
         "path": "/api/v1/groups",
         "status_code": 200,
-        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "body": "[{\"id\": \"00g1234567890abcdef\", \"created\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"lastMembershipUpdated\": \"2020-01-01T00:00:00.000Z\", \"objectClass\": [\"okta:user_group\"], \"type\": \"OKTA_GROUP\", \"profile\": {\"name\": \"Engineering\", \"description\": \"Engineering team\"}}]",
         "description": "fetch all okta groups (returns engineering group)"
       },
       {
@@ -77,7 +77,7 @@
         "method": "GET",
         "path": "/api/v1/groups/00g1234567890abcdef/users",
         "status_code": 200,
-        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}}]",
+        "body": "[{\"id\": \"00u1111111111111111\", \"status\": \"ACTIVE\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"alice@example.com\", \"githubUsername\": \"alice-gh\"}}]",
         "description": "fetch users in engineering group (returns alice-gh)"
       },
       {
@@ -571,7 +571,7 @@
         "method": "GET",
         "path": "/api/v1/groups",
         "status_code": 200,
-        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "body": "[{\"id\": \"00g1234567890abcdef\", \"created\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"lastMembershipUpdated\": \"2020-01-01T00:00:00.000Z\", \"objectClass\": [\"okta:user_group\"], \"type\": \"OKTA_GROUP\", \"profile\": {\"name\": \"Engineering\", \"description\": \"Engineering team\"}}]",
         "description": "fetch all okta groups (returns engineering group)"
       },
       {
@@ -579,7 +579,7 @@
         "method": "GET",
         "path": "/api/v1/groups/00g1234567890abcdef/users",
         "status_code": 200,
-        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}},{\"id\":\"00u2222222222222222\",\"status\":\"SUSPENDED\",\"profile\":{\"email\":\"suspended@example.com\",\"githubUsername\":\"suspended-user\"}},{\"id\":\"00u3333333333333333\",\"status\":\"DEPROVISIONED\",\"profile\":{\"email\":\"inactive@example.com\",\"githubUsername\":\"inactive-user\"}}]",
+        "body": "[{\"id\": \"00u1111111111111111\", \"status\": \"ACTIVE\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"alice@example.com\", \"githubUsername\": \"alice-gh\"}}, {\"id\": \"00u2222222222222222\", \"status\": \"SUSPENDED\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"suspended@example.com\", \"githubUsername\": \"suspended-user\"}}, {\"id\": \"00u3333333333333333\", \"status\": \"DEPROVISIONED\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"inactive@example.com\", \"githubUsername\": \"inactive-user\"}}]",
         "description": "fetch users in engineering group (active, suspended, deprovisioned statuses)"
       },
       {
@@ -667,7 +667,7 @@
         "method": "GET",
         "path": "/api/v1/groups",
         "status_code": 200,
-        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "body": "[{\"id\": \"00g1234567890abcdef\", \"created\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"lastMembershipUpdated\": \"2020-01-01T00:00:00.000Z\", \"objectClass\": [\"okta:user_group\"], \"type\": \"OKTA_GROUP\", \"profile\": {\"name\": \"Engineering\", \"description\": \"Engineering team\"}}]",
         "description": "fetch all okta groups (returns engineering group)"
       },
       {
@@ -675,7 +675,7 @@
         "method": "GET",
         "path": "/api/v1/groups/00g1234567890abcdef/users",
         "status_code": 200,
-        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}}]",
+        "body": "[{\"id\": \"00u1111111111111111\", \"status\": \"ACTIVE\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"alice@example.com\", \"githubUsername\": \"alice-gh\"}}]",
         "description": "fetch users in engineering group (only alice-gh)"
       },
       {
@@ -750,7 +750,7 @@
         "method": "GET",
         "path": "/api/v1/groups",
         "status_code": 200,
-        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "body": "[{\"id\": \"00g1234567890abcdef\", \"created\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"lastMembershipUpdated\": \"2020-01-01T00:00:00.000Z\", \"objectClass\": [\"okta:user_group\"], \"type\": \"OKTA_GROUP\", \"profile\": {\"name\": \"Engineering\", \"description\": \"Engineering team\"}}]",
         "description": "fetch all okta groups (returns engineering group)"
       },
       {
@@ -808,7 +808,7 @@
         "method": "GET",
         "path": "/api/v1/groups",
         "status_code": 200,
-        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "body": "[{\"id\": \"00g1234567890abcdef\", \"created\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"lastMembershipUpdated\": \"2020-01-01T00:00:00.000Z\", \"objectClass\": [\"okta:user_group\"], \"type\": \"OKTA_GROUP\", \"profile\": {\"name\": \"Engineering\", \"description\": \"Engineering team\"}}]",
         "description": "fetch all okta groups (returns engineering group)"
       },
       {
@@ -883,7 +883,7 @@
         "method": "GET",
         "path": "/api/v1/groups",
         "status_code": 200,
-        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "body": "[{\"id\": \"00g1234567890abcdef\", \"created\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"lastMembershipUpdated\": \"2020-01-01T00:00:00.000Z\", \"objectClass\": [\"okta:user_group\"], \"type\": \"OKTA_GROUP\", \"profile\": {\"name\": \"Engineering\", \"description\": \"Engineering team\"}}]",
         "description": "fetch all okta groups (returns engineering group)"
       },
       {
@@ -891,7 +891,7 @@
         "method": "GET",
         "path": "/api/v1/groups/00g1234567890abcdef/users",
         "status_code": 200,
-        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}}]",
+        "body": "[{\"id\": \"00u1111111111111111\", \"status\": \"ACTIVE\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"alice@example.com\", \"githubUsername\": \"alice-gh\"}}]",
         "description": "fetch users in engineering group (returns alice-gh)"
       },
       {
@@ -998,7 +998,7 @@
         "method": "GET",
         "path": "/api/v1/groups",
         "status_code": 200,
-        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "body": "[{\"id\": \"00g1234567890abcdef\", \"created\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"lastMembershipUpdated\": \"2020-01-01T00:00:00.000Z\", \"objectClass\": [\"okta:user_group\"], \"type\": \"OKTA_GROUP\", \"profile\": {\"name\": \"Engineering\", \"description\": \"Engineering team\"}}]",
         "description": "fetch all okta groups (returns engineering group)"
       },
       {
@@ -1006,7 +1006,7 @@
         "method": "GET",
         "path": "/api/v1/groups/00g1234567890abcdef/users",
         "status_code": 200,
-        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}}]",
+        "body": "[{\"id\": \"00u1111111111111111\", \"status\": \"ACTIVE\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"alice@example.com\", \"githubUsername\": \"alice-gh\"}}]",
         "description": "fetch users in engineering group (returns only alice-gh)"
       },
       {
@@ -1105,7 +1105,7 @@
         "method": "GET",
         "path": "/api/v1/groups",
         "status_code": 200,
-        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "body": "[{\"id\": \"00g1234567890abcdef\", \"created\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"lastMembershipUpdated\": \"2020-01-01T00:00:00.000Z\", \"objectClass\": [\"okta:user_group\"], \"type\": \"OKTA_GROUP\", \"profile\": {\"name\": \"Engineering\", \"description\": \"Engineering team\"}}]",
         "description": "fetch all okta groups (returns engineering group)"
       },
       {
@@ -1113,7 +1113,7 @@
         "method": "GET",
         "path": "/api/v1/groups/00g1234567890abcdef/users",
         "status_code": 200,
-        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}},{\"id\":\"00u2222222222222222\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"bob@example.com\",\"githubUsername\":\"bob-gh\"}}]",
+        "body": "[{\"id\": \"00u1111111111111111\", \"status\": \"ACTIVE\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"alice@example.com\", \"githubUsername\": \"alice-gh\"}}, {\"id\": \"00u2222222222222222\", \"status\": \"ACTIVE\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"bob@example.com\", \"githubUsername\": \"bob-gh\"}}]",
         "description": "fetch users in engineering group (returns alice-gh and bob-gh)"
       },
       {
@@ -1191,7 +1191,7 @@
         "method": "GET",
         "path": "/api/v1/groups",
         "status_code": 200,
-        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "body": "[{\"id\": \"00g1234567890abcdef\", \"created\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"lastMembershipUpdated\": \"2020-01-01T00:00:00.000Z\", \"objectClass\": [\"okta:user_group\"], \"type\": \"OKTA_GROUP\", \"profile\": {\"name\": \"Engineering\", \"description\": \"Engineering team\"}}]",
         "description": "fetch all okta groups (returns engineering group)"
       },
       {
@@ -1199,7 +1199,7 @@
         "method": "GET",
         "path": "/api/v1/groups/00g1234567890abcdef/users",
         "status_code": 200,
-        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}}]",
+        "body": "[{\"id\": \"00u1111111111111111\", \"status\": \"ACTIVE\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"alice@example.com\", \"githubUsername\": \"alice-gh\"}}]",
         "description": "fetch users in engineering group (returns alice-gh)"
       },
       {
@@ -1287,7 +1287,7 @@
         "method": "GET",
         "path": "/api/v1/groups",
         "status_code": 200,
-        "body": "[{\"id\":\"00g1234567890abcdef\",\"profile\":{\"name\":\"Engineering\",\"description\":\"Engineering team\"}}]",
+        "body": "[{\"id\": \"00g1234567890abcdef\", \"created\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"lastMembershipUpdated\": \"2020-01-01T00:00:00.000Z\", \"objectClass\": [\"okta:user_group\"], \"type\": \"OKTA_GROUP\", \"profile\": {\"name\": \"Engineering\", \"description\": \"Engineering team\"}}]",
         "description": "fetch all okta groups (returns engineering group)"
       },
       {
@@ -1295,7 +1295,7 @@
         "method": "GET",
         "path": "/api/v1/groups/00g1234567890abcdef/users",
         "status_code": 200,
-        "body": "[{\"id\":\"00u1111111111111111\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"alice@example.com\",\"githubUsername\":\"alice-gh\"}},{\"id\":\"00u2222222222222222\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"bob@example.com\"}},{\"id\":\"00u3333333333333333\",\"status\":\"ACTIVE\",\"profile\":{\"email\":\"charlie@example.com\",\"githubUsername\":\"\"}}]",
+        "body": "[{\"id\": \"00u1111111111111111\", \"status\": \"ACTIVE\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"alice@example.com\", \"githubUsername\": \"alice-gh\"}}, {\"id\": \"00u2222222222222222\", \"status\": \"ACTIVE\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"bob@example.com\"}}, {\"id\": \"00u3333333333333333\", \"status\": \"ACTIVE\", \"created\": \"2020-01-01T00:00:00.000Z\", \"activated\": \"2020-01-01T00:00:00.000Z\", \"statusChanged\": \"2020-01-01T00:00:00.000Z\", \"lastLogin\": \"2020-01-01T00:00:00.000Z\", \"lastUpdated\": \"2020-01-01T00:00:00.000Z\", \"passwordChanged\": \"2020-01-01T00:00:00.000Z\", \"type\": {\"id\": \"oty1234567890\"}, \"profile\": {\"email\": \"charlie@example.com\", \"githubUsername\": \"\"}}]",
         "description": "fetch users in engineering group (alice has gh username, bob and charlie do not)"
       },
       {

@@ -5,7 +5,7 @@ import (
 
 	"github.com/cockroachdb/errors"
 	internalerrors "github.com/cruxstack/github-ops-app/internal/errors"
-	"github.com/okta/okta-sdk-golang/v2/okta"
+	"github.com/okta/okta-sdk-golang/v6/okta"
 )
 
 // GroupInfo contains Okta group details and member list.
@@ -34,19 +34,31 @@ func (c *Client) GetGroupsByPattern(pattern string) ([]*GroupInfo, error) {
 
 	var matched []*GroupInfo
 	for _, group := range allGroups {
-		if group == nil || group.Profile == nil {
+		if group.Profile == nil {
 			continue
 		}
 
-		if re.MatchString(group.Profile.Name) {
-			result, err := c.GetGroupMembers(group.Id)
+		// extract group name from either profile type
+		var groupName string
+		if group.Profile.OktaUserGroupProfile != nil {
+			groupName = group.Profile.OktaUserGroupProfile.GetName()
+		} else if group.Profile.OktaActiveDirectoryGroupProfile != nil {
+			groupName = group.Profile.OktaActiveDirectoryGroupProfile.GetName()
+		}
+
+		if groupName == "" {
+			continue
+		}
+
+		if re.MatchString(groupName) {
+			result, err := c.GetGroupMembers(group.GetId())
 			if err != nil {
 				continue
 			}
 
 			matched = append(matched, &GroupInfo{
-				ID:                      group.Id,
-				Name:                    group.Profile.Name,
+				ID:                      group.GetId(),
+				Name:                    groupName,
 				Members:                 result.Members,
 				SkippedNoGitHubUsername: result.SkippedNoGitHubUsername,
 			})
@@ -63,14 +75,24 @@ func (c *Client) GetGroupInfo(groupName string) (*GroupInfo, error) {
 		return nil, err
 	}
 
-	result, err := c.GetGroupMembers(group.Id)
+	result, err := c.GetGroupMembers(group.GetId())
 	if err != nil {
 		return nil, err
 	}
 
+	// extract group name from either profile type
+	var name string
+	if group.Profile != nil {
+		if group.Profile.OktaUserGroupProfile != nil {
+			name = group.Profile.OktaUserGroupProfile.GetName()
+		} else if group.Profile.OktaActiveDirectoryGroupProfile != nil {
+			name = group.Profile.OktaActiveDirectoryGroupProfile.GetName()
+		}
+	}
+
 	return &GroupInfo{
-		ID:                      group.Id,
-		Name:                    group.Profile.Name,
+		ID:                      group.GetId(),
+		Name:                    name,
 		Members:                 result.Members,
 		SkippedNoGitHubUsername: result.SkippedNoGitHubUsername,
 	}, nil
@@ -78,7 +100,7 @@ func (c *Client) GetGroupInfo(groupName string) (*GroupInfo, error) {
 
 // FilterEnabledGroups filters Okta groups to only those in the enabled list.
 // returns all groups if enabled list is empty.
-func FilterEnabledGroups(groups []*okta.Group, enabledNames []string) []*okta.Group {
+func FilterEnabledGroups(groups []okta.Group, enabledNames []string) []okta.Group {
 	if len(enabledNames) == 0 {
 		return groups
 	}
@@ -88,10 +110,19 @@ func FilterEnabledGroups(groups []*okta.Group, enabledNames []string) []*okta.Gr
 		enabledMap[name] = true
 	}
 
-	var filtered []*okta.Group
+	var filtered []okta.Group
 	for _, group := range groups {
-		if enabledMap[group.Profile.Name] {
-			filtered = append(filtered, group)
+		if group.Profile != nil {
+			var groupName string
+			if group.Profile.OktaUserGroupProfile != nil {
+				groupName = group.Profile.OktaUserGroupProfile.GetName()
+			} else if group.Profile.OktaActiveDirectoryGroupProfile != nil {
+				groupName = group.Profile.OktaActiveDirectoryGroupProfile.GetName()
+			}
+
+			if groupName != "" && enabledMap[groupName] {
+				filtered = append(filtered, group)
+			}
 		}
 	}
 
