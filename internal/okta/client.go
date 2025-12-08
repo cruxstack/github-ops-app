@@ -10,11 +10,11 @@ import (
 	"encoding/pem"
 	"fmt"
 	"net/http"
+	"net/url"
 
 	"github.com/cockroachdb/errors"
 	internalerrors "github.com/cruxstack/github-ops-app/internal/errors"
-	"github.com/okta/okta-sdk-golang/v2/okta"
-	"github.com/okta/okta-sdk-golang/v2/okta/query"
+	"github.com/okta/okta-sdk-golang/v6/okta"
 )
 
 // DefaultScopes defines the required OAuth scopes for the Okta API.
@@ -62,7 +62,7 @@ func convertToPKCS1(keyPEM []byte) ([]byte, error) {
 
 // Client wraps the Okta SDK client with custom configuration.
 type Client struct {
-	client          *okta.Client
+	apiClient       *okta.APIClient
 	ctx             context.Context
 	githubUserField string
 }
@@ -101,49 +101,76 @@ func NewClientWithContext(ctx context.Context, cfg *ClientConfig) (*Client, erro
 		return nil, errors.Wrap(err, "failed to convert private key")
 	}
 
+	scopes := cfg.Scopes
+	if len(scopes) == 0 {
+		scopes = DefaultScopes
+	}
+
+	// v6 uses NewConfiguration which returns (config, error)
 	opts := []okta.ConfigSetter{
 		okta.WithOrgUrl(orgURL),
 		okta.WithAuthorizationMode("PrivateKey"),
 		okta.WithClientId(cfg.ClientID),
 		okta.WithPrivateKey(string(privateKey)),
+		okta.WithScopes(scopes),
 	}
 
 	if cfg.PrivateKeyID != "" {
 		opts = append(opts, okta.WithPrivateKeyId(cfg.PrivateKeyID))
 	}
 
-	if len(cfg.Scopes) > 0 {
-		opts = append(opts, okta.WithScopes(cfg.Scopes))
-	} else {
-		opts = append(opts, okta.WithScopes(DefaultScopes))
-	}
-
 	if certPool, ok := ctx.Value("okta_tls_cert_pool").(*x509.CertPool); ok && certPool != nil {
-		httpClient := http.Client{
+		httpClient := &http.Client{
 			Transport: &http.Transport{
 				TLSClientConfig: &tls.Config{
 					RootCAs: certPool,
 				},
 			},
 		}
-		opts = append(opts, okta.WithHttpClient(httpClient))
+		opts = append(opts, okta.WithHttpClientPtr(httpClient))
 	}
 
-	_, client, err := okta.NewClient(ctx, opts...)
+	oktaCfg, err := okta.NewConfiguration(opts...)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create okta client")
+		return nil, errors.Wrap(err, "failed to create okta configuration")
 	}
+
+	// v6 SDK parses OrgUrl and uses url.Parse().Hostname() which strips the port
+	// for testing with custom ports, we need to override the server configuration
+	// the SDK uses Servers[0].URL for building API call URLs
+	if cfg.BaseURL != "" {
+		parsedURL, err := url.Parse(cfg.BaseURL)
+		if err == nil {
+			// Override the default server configuration with full URL including port
+			oktaCfg.Servers = okta.ServerConfigurations{
+				okta.ServerConfiguration{
+					URL:         cfg.BaseURL,
+					Description: "Custom Okta server (test mode)",
+				},
+			}
+			// Also update Host and Scheme for consistency
+			// Include port in Host if present
+			if parsedURL.Port() != "" {
+				oktaCfg.Host = parsedURL.Host // Host includes port
+			} else {
+				oktaCfg.Host = parsedURL.Hostname()
+			}
+			oktaCfg.Scheme = parsedURL.Scheme
+		}
+	}
+
+	apiClient := okta.NewAPIClient(oktaCfg)
 
 	return &Client{
-		client:          client,
+		apiClient:       apiClient,
 		ctx:             ctx,
 		githubUserField: cfg.GitHubUserField,
 	}, nil
 }
 
-// GetClient returns the underlying Okta SDK client.
-func (c *Client) GetClient() *okta.Client {
-	return c.client
+// GetAPIClient returns the underlying Okta SDK API client.
+func (c *Client) GetAPIClient() *okta.APIClient {
+	return c.apiClient
 }
 
 // GetContext returns the context used for API requests.
@@ -152,8 +179,8 @@ func (c *Client) GetContext() context.Context {
 }
 
 // ListGroups fetches all Okta groups.
-func (c *Client) ListGroups() ([]*okta.Group, error) {
-	groups, _, err := c.client.Group.ListGroups(c.ctx, &query.Params{})
+func (c *Client) ListGroups() ([]okta.Group, error) {
+	groups, _, err := c.apiClient.GroupAPI.ListGroups(c.ctx).Execute()
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to list groups")
 	}
@@ -162,16 +189,32 @@ func (c *Client) ListGroups() ([]*okta.Group, error) {
 
 // GetGroupByName searches for an Okta group by exact name match.
 func (c *Client) GetGroupByName(name string) (*okta.Group, error) {
-	groups, _, err := c.client.Group.ListGroups(c.ctx, &query.Params{
-		Q: name,
-	})
+	groups, _, err := c.apiClient.GroupAPI.ListGroups(c.ctx).Q(name).Execute()
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to search for group '%s'", name)
 	}
 
-	for _, group := range groups {
-		if group.Profile.Name == name {
-			return group, nil
+	for i := range groups {
+		group := &groups[i]
+		// check if profile is nil
+		if group.Profile == nil {
+			continue
+		}
+
+		// try OktaUserGroupProfile first
+		if group.Profile.OktaUserGroupProfile != nil {
+			groupName := group.Profile.OktaUserGroupProfile.GetName()
+			if groupName == name {
+				return group, nil
+			}
+		}
+
+		// try OktaActiveDirectoryGroupProfile as fallback
+		if group.Profile.OktaActiveDirectoryGroupProfile != nil {
+			groupName := group.Profile.OktaActiveDirectoryGroupProfile.GetName()
+			if groupName == name {
+				return group, nil
+			}
 		}
 	}
 
@@ -189,7 +232,7 @@ type GroupMembersResult struct {
 // suspended/deprovisioned users. skips users without a GitHub username in
 // their profile and tracks them separately.
 func (c *Client) GetGroupMembers(groupID string) (*GroupMembersResult, error) {
-	users, _, err := c.client.Group.ListGroupUsers(c.ctx, groupID, &query.Params{})
+	users, _, err := c.apiClient.GroupAPI.ListGroupUsers(c.ctx, groupID).Execute()
 	if err != nil {
 		return nil, errors.Wrapf(err, "failed to list members for group '%s'", groupID)
 	}
@@ -200,23 +243,31 @@ func (c *Client) GetGroupMembers(groupID string) (*GroupMembersResult, error) {
 	}
 
 	for _, user := range users {
-		if user.Status != "ACTIVE" {
+		if user.GetStatus() != "ACTIVE" {
 			continue
 		}
 
-		if user.Profile == nil {
+		profile := user.GetProfile()
+		additionalProps := profile.AdditionalProperties
+		if additionalProps == nil {
 			continue
 		}
 
-		githubUsername := (*user.Profile)[c.githubUserField]
-		if username, ok := githubUsername.(string); ok && username != "" {
-			result.Members = append(result.Members, username)
-		} else {
-			email := (*user.Profile)["email"]
-			if emailStr, ok := email.(string); ok && emailStr != "" {
-				result.SkippedNoGitHubUsername = append(
-					result.SkippedNoGitHubUsername, emailStr)
+		githubUsername, ok := additionalProps[c.githubUserField]
+		if ok {
+			if username, ok := githubUsername.(string); ok && username != "" {
+				result.Members = append(result.Members, username)
+				continue
 			}
+		}
+
+		// user doesn't have github username, track by email
+		if email, ok := additionalProps["email"].(string); ok && email != "" {
+			result.SkippedNoGitHubUsername = append(
+				result.SkippedNoGitHubUsername, email)
+		} else if profile.GetEmail() != "" {
+			result.SkippedNoGitHubUsername = append(
+				result.SkippedNoGitHubUsername, profile.GetEmail())
 		}
 	}
 
