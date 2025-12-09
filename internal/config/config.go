@@ -56,6 +56,7 @@ type Config struct {
 	SlackChannelPRBypass      string
 	SlackChannelOktaSync      string
 	SlackChannelOrphanedUsers string
+	SlackPRBypassFooterNote   string
 	SlackAPIURL               string
 }
 
@@ -179,6 +180,7 @@ func NewConfigWithContext(ctx context.Context) (*Config, error) {
 		SlackChannelPRBypass:      os.Getenv("APP_SLACK_CHANNEL_PR_BYPASS"),
 		SlackChannelOktaSync:      os.Getenv("APP_SLACK_CHANNEL_OKTA_SYNC"),
 		SlackChannelOrphanedUsers: os.Getenv("APP_SLACK_CHANNEL_ORPHANED_USERS"),
+		SlackPRBypassFooterNote:   os.Getenv("APP_SLACK_FOOTER_NOTE_PR_BYPASS"),
 		SlackAPIURL:               os.Getenv("APP_SLACK_API_URL"),
 	}
 
@@ -371,6 +373,7 @@ type RedactedConfig struct {
 	SlackChannelPRBypass      string `json:"slack_channel_pr_bypass"`
 	SlackChannelOktaSync      string `json:"slack_channel_okta_sync"`
 	SlackChannelOrphanedUsers string `json:"slack_channel_orphaned_users"`
+	SlackPRBypassFooterNote   string `json:"slack_pr_bypass_footer_note"`
 	SlackAPIURL               string `json:"slack_api_url"`
 }
 
@@ -426,6 +429,7 @@ func (c *Config) Redacted() RedactedConfig {
 		SlackChannelPRBypass:      c.SlackChannelPRBypass,
 		SlackChannelOktaSync:      c.SlackChannelOktaSync,
 		SlackChannelOrphanedUsers: c.SlackChannelOrphanedUsers,
+		SlackPRBypassFooterNote:   c.SlackPRBypassFooterNote,
 		SlackAPIURL:               c.SlackAPIURL,
 	}
 }
