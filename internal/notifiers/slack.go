@@ -14,20 +14,27 @@ type SlackChannels struct {
 	OrphanedUsers string
 }
 
+// SlackMessages holds optional custom messages for different notification
+// types. empty values are excluded from the notification.
+type SlackMessages struct {
+	PRBypassFooterNote string
+}
+
 // SlackNotifier sends formatted messages to Slack channels.
 type SlackNotifier struct {
 	client   *slack.Client
 	channels SlackChannels
+	messages SlackMessages
 }
 
 // NewSlackNotifier creates a Slack notifier with default API URL.
-func NewSlackNotifier(token string, channels SlackChannels) *SlackNotifier {
-	return NewSlackNotifierWithAPIURL(token, channels, "")
+func NewSlackNotifier(token string, channels SlackChannels, messages SlackMessages) *SlackNotifier {
+	return NewSlackNotifierWithAPIURL(token, channels, messages, "")
 }
 
 // NewSlackNotifierWithAPIURL creates a Slack notifier with custom API URL.
 // useful for testing with mock servers.
-func NewSlackNotifierWithAPIURL(token string, channels SlackChannels, apiURL string) *SlackNotifier {
+func NewSlackNotifierWithAPIURL(token string, channels SlackChannels, messages SlackMessages, apiURL string) *SlackNotifier {
 	var opts []slack.Option
 	if apiURL != "" {
 		opts = append(opts, slack.OptionAPIURL(apiURL))
@@ -35,6 +42,7 @@ func NewSlackNotifierWithAPIURL(token string, channels SlackChannels, apiURL str
 	return &SlackNotifier{
 		client:   slack.New(token, opts...),
 		channels: channels,
+		messages: messages,
 	}
 }
 

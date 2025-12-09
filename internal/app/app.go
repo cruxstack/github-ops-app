@@ -72,7 +72,10 @@ func New(ctx context.Context, cfg *config.Config) (*App, error) {
 			OktaSync:      cfg.SlackChannelOktaSync,
 			OrphanedUsers: cfg.SlackChannelOrphanedUsers,
 		}
-		app.Notifier = notifiers.NewSlackNotifierWithAPIURL(cfg.SlackToken, channels, cfg.SlackAPIURL)
+		messages := notifiers.SlackMessages{
+			PRBypassFooterNote: cfg.SlackPRBypassFooterNote,
+		}
+		app.Notifier = notifiers.NewSlackNotifierWithAPIURL(cfg.SlackToken, channels, messages, cfg.SlackAPIURL)
 	}
 
 	return app, nil

@@ -67,6 +67,13 @@ func (s *SlackNotifier) NotifyPRBypass(ctx context.Context, result *client.PRCom
 		))
 	}
 
+	if s.messages.PRBypassFooterNote != "" {
+		blocks = append(blocks, slack.NewContextBlock(
+			"footer",
+			slack.NewTextBlockObject("mrkdwn", s.messages.PRBypassFooterNote, false, false),
+		))
+	}
+
 	channel := s.channelFor(s.channels.PRBypass)
 	_, _, err := s.client.PostMessageContext(
 		ctx,
