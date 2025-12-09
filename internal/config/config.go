@@ -24,6 +24,7 @@ type Config struct {
 	// General
 	DebugEnabled bool
 	BasePath     string
+	AdminToken   string
 
 	// GitHub App
 	GitHubOrg            string
@@ -165,8 +166,14 @@ func NewConfigWithContext(ctx context.Context) (*Config, error) {
 		return nil, err
 	}
 
+	adminToken, err := getEnv(ctx, "APP_ADMIN_TOKEN")
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := Config{
 		DebugEnabled:              debugEnabled,
+		AdminToken:                adminToken,
 		GitHubOrg:                 os.Getenv("APP_GITHUB_ORG"),
 		GitHubWebhookSecret:       githubWebhookSecret,
 		GitHubBaseURL:             os.Getenv("APP_GITHUB_BASE_URL"),
@@ -341,6 +348,7 @@ type RedactedConfig struct {
 	// General
 	DebugEnabled bool   `json:"debug_enabled"`
 	BasePath     string `json:"base_path"`
+	AdminToken   string `json:"admin_token"`
 
 	// GitHub App
 	GitHubOrg            string `json:"github_org"`
@@ -397,6 +405,7 @@ func (c *Config) Redacted() RedactedConfig {
 		// General
 		DebugEnabled: c.DebugEnabled,
 		BasePath:     c.BasePath,
+		AdminToken:   redact(c.AdminToken),
 
 		// GitHub App
 		GitHubOrg:            c.GitHubOrg,
