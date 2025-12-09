@@ -112,6 +112,9 @@ func (a *App) handleStatusRequest(req Request) Response {
 	if req.Method != "GET" {
 		return errorResponse(405, "method not allowed")
 	}
+	if resp := a.checkAdminAuth(req); resp != nil {
+		return *resp
+	}
 	return jsonResponse(200, a.GetStatus())
 }
 
@@ -119,6 +122,9 @@ func (a *App) handleStatusRequest(req Request) Response {
 func (a *App) handleConfigRequest(req Request) Response {
 	if req.Method != "GET" {
 		return errorResponse(405, "method not allowed")
+	}
+	if resp := a.checkAdminAuth(req); resp != nil {
+		return *resp
 	}
 	return jsonResponse(200, a.Config.Redacted())
 }
@@ -162,6 +168,9 @@ func (a *App) handleScheduledHTTPRequest(ctx context.Context, req Request, path 
 	if req.Method != "POST" {
 		return errorResponse(405, "method not allowed")
 	}
+	if resp := a.checkAdminAuth(req); resp != nil {
+		return *resp
+	}
 
 	// extract action from path (e.g., "/scheduled/okta-sync" -> "okta-sync")
 	action := strings.TrimPrefix(path, "/scheduled/")
@@ -198,4 +207,31 @@ func errorResponse(status int, message string) Response {
 		ContentType: "text/plain",
 		Body:        []byte(message),
 	}
+}
+
+// checkAdminAuth validates the admin token from the request.
+// returns nil if auth is disabled (no token configured) or if token is valid.
+// returns an error response if token is required but missing or invalid.
+func (a *App) checkAdminAuth(req Request) *Response {
+	if a.Config.AdminToken == "" {
+		return nil
+	}
+
+	authHeader := req.Headers["authorization"]
+	if authHeader == "" {
+		resp := errorResponse(401, "unauthorized")
+		return &resp
+	}
+
+	token := strings.TrimPrefix(authHeader, "Bearer ")
+	if token == authHeader {
+		token = strings.TrimPrefix(authHeader, "bearer ")
+	}
+
+	if token != a.Config.AdminToken {
+		resp := errorResponse(401, "unauthorized")
+		return &resp
+	}
+
+	return nil
 }

@@ -169,3 +169,163 @@ func TestFakeDataTypes(t *testing.T) {
 	// ensure fake orphaned users report is compatible with notifier
 	var _ *okta.OrphanedUsersReport = fakeOrphanedUsersReport()
 }
+
+func TestCheckAdminAuth(t *testing.T) {
+	tests := []struct {
+		name        string
+		adminToken  string
+		authHeader  string
+		expectError bool
+	}{
+		{
+			name:        "no token configured, no header",
+			adminToken:  "",
+			authHeader:  "",
+			expectError: false,
+		},
+		{
+			name:        "no token configured, with header",
+			adminToken:  "",
+			authHeader:  "Bearer some-token",
+			expectError: false,
+		},
+		{
+			name:        "token configured, no header",
+			adminToken:  "secret-token",
+			authHeader:  "",
+			expectError: true,
+		},
+		{
+			name:        "token configured, wrong token",
+			adminToken:  "secret-token",
+			authHeader:  "Bearer wrong-token",
+			expectError: true,
+		},
+		{
+			name:        "token configured, correct token",
+			adminToken:  "secret-token",
+			authHeader:  "Bearer secret-token",
+			expectError: false,
+		},
+		{
+			name:        "token configured, lowercase bearer",
+			adminToken:  "secret-token",
+			authHeader:  "bearer secret-token",
+			expectError: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := &App{
+				Config: &config.Config{AdminToken: tt.adminToken},
+				Logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+			}
+
+			headers := map[string]string{}
+			if tt.authHeader != "" {
+				headers["authorization"] = tt.authHeader
+			}
+
+			req := Request{Headers: headers}
+			resp := app.checkAdminAuth(req)
+
+			if tt.expectError && resp == nil {
+				t.Error("expected error response, got nil")
+			}
+			if !tt.expectError && resp != nil {
+				t.Errorf("expected no error, got status %d", resp.StatusCode)
+			}
+			if tt.expectError && resp != nil && resp.StatusCode != 401 {
+				t.Errorf("expected status 401, got %d", resp.StatusCode)
+			}
+		})
+	}
+}
+
+func TestHandleRequest_AdminAuthOnProtectedEndpoints(t *testing.T) {
+	tests := []struct {
+		name           string
+		path           string
+		method         string
+		adminToken     string
+		authHeader     string
+		expectedStatus int
+	}{
+		{
+			name:           "status endpoint, no token configured",
+			path:           "/server/status",
+			method:         "GET",
+			adminToken:     "",
+			authHeader:     "",
+			expectedStatus: 200,
+		},
+		{
+			name:           "status endpoint, token required, missing",
+			path:           "/server/status",
+			method:         "GET",
+			adminToken:     "secret",
+			authHeader:     "",
+			expectedStatus: 401,
+		},
+		{
+			name:           "status endpoint, token required, correct",
+			path:           "/server/status",
+			method:         "GET",
+			adminToken:     "secret",
+			authHeader:     "Bearer secret",
+			expectedStatus: 200,
+		},
+		{
+			name:           "config endpoint, token required, missing",
+			path:           "/server/config",
+			method:         "GET",
+			adminToken:     "secret",
+			authHeader:     "",
+			expectedStatus: 401,
+		},
+		{
+			name:           "config endpoint, token required, correct",
+			path:           "/server/config",
+			method:         "GET",
+			adminToken:     "secret",
+			authHeader:     "Bearer secret",
+			expectedStatus: 200,
+		},
+		{
+			name:           "scheduled endpoint, token required, missing",
+			path:           "/scheduled/slack-test",
+			method:         "POST",
+			adminToken:     "secret",
+			authHeader:     "",
+			expectedStatus: 401,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			app := &App{
+				Config: &config.Config{AdminToken: tt.adminToken},
+				Logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
+			}
+
+			headers := map[string]string{}
+			if tt.authHeader != "" {
+				headers["authorization"] = tt.authHeader
+			}
+
+			req := Request{
+				Type:    RequestTypeHTTP,
+				Method:  tt.method,
+				Path:    tt.path,
+				Headers: headers,
+			}
+
+			resp := app.HandleRequest(context.Background(), req)
+
+			if resp.StatusCode != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d", tt.expectedStatus, resp.StatusCode)
+			}
+		})
+	}
+}
