@@ -15,8 +15,9 @@ This guide walks through creating a Slack app for github-ops-app notifications.
 2. Click **Create New App**
 3. Select **From an app manifest**
 4. Select your workspace
-5. Copy the contents of [`assets/slack/manifest.json`](../assets/slack/manifest.json)
-   and paste into the manifest editor
+5. Copy the contents of
+   [`assets/slack/manifest.json`](../assets/slack/manifest.json) and paste into
+   the manifest editor
 6. Click **Create**
 
 ### Option B: Manual Setup
@@ -34,15 +35,17 @@ Then continue to configure OAuth scopes manually (Step 2).
 If you used the manifest, scopes are pre-configured. Otherwise:
 
 1. Go to **OAuth & Permissions** in the sidebar
+
 2. Scroll to **Scopes** → **Bot Token Scopes**
+
 3. Add the following scopes:
 
-   | Scope               | Purpose                                      |
-   |---------------------|----------------------------------------------|
-   | `chat:write`        | Post messages to channels bot is member of   |
-   | `chat:write.public` | Post to public channels without joining      |
-   | `channels:read`     | View basic channel info                      |
-   | `channels:join`     | Join public channels                         |
+   | Scope               | Purpose                                    |
+   | ------------------- | ------------------------------------------ |
+   | `chat:write`        | Post messages to channels bot is member of |
+   | `chat:write.public` | Post to public channels without joining    |
+   | `channels:read`     | View basic channel info                    |
+   | `channels:join`     | Join public channels                       |
 
 ## Step 3: Install to Workspace
 
@@ -51,6 +54,7 @@ If you used the manifest, scopes are pre-configured. Otherwise:
 3. Review permissions and click **Allow**
 
 If your workspace requires admin approval:
+
 - Submit the app for approval
 - Wait for workspace admin to approve
 - Return to install after approval
@@ -129,7 +133,8 @@ Make notifications more recognizable:
 2. Under **Display Information**:
    - **App name**: `GitHub Ops Bot` (or your preference)
    - **Short description**: Brief description of the bot
-   - **App icon**: Upload a custom icon (use `assets/slack/icon.png` or your own)
+   - **App icon**: Upload a custom icon (use `assets/slack/icon.png` or your
+     own)
    - **Background color**: `#10203B` or your brand color
 
 ## Verification
@@ -148,6 +153,7 @@ curl -X POST https://slack.com/api/chat.postMessage \
 ```
 
 Expected response:
+
 ```json
 {
   "ok": true,
@@ -161,12 +167,12 @@ Expected response:
 
 The bot sends these notification types:
 
-| Event                 | Description                                    |
-|-----------------------|------------------------------------------------|
-| PR Compliance Alert   | PR merged bypassing branch protection          |
-| Okta Sync Report      | Summary of team membership changes             |
-| Orphaned Users Alert  | Org members not in any synced teams            |
-| Sync Error            | Errors during Okta sync process                |
+| Event                | Description                           |
+| -------------------- | ------------------------------------- |
+| PR Compliance Alert  | PR merged bypassing branch protection |
+| Okta Sync Report     | Summary of team membership changes    |
+| Orphaned Users Alert | Org members not in any synced teams   |
+| Sync Error           | Errors during Okta sync process       |
 
 ## Troubleshooting
 
@@ -204,6 +210,7 @@ The bot sends these notification types:
 
 Slack has rate limits (typically 1 message per second per channel). The app
 handles rate limits gracefully, but if you see delays:
+
 - Notifications are queued and retried
 - Consider consolidating notifications for high-volume events
 

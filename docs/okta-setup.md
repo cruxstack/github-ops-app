@@ -11,14 +11,18 @@ github-ops-app to sync Okta groups with GitHub teams.
 ## Step 1: Create API Services Application
 
 1. Log in to your **Okta Admin Console**
+
 2. Navigate to **Applications** → **Applications**
+
 3. Click **Create App Integration**
+
 4. Select **API Services** and click **Next**
 
    > API Services apps use OAuth 2.0 client credentials flow with no user
    > context, ideal for server-to-server integrations.
 
 5. Enter application name: `github-ops-app` (or similar)
+
 6. Click **Save**
 
 ## Step 2: Configure Client Authentication
@@ -64,12 +68,13 @@ On the **General** tab, find and save:
 ## Step 5: Grant API Scopes
 
 1. Go to the **Okta API Scopes** tab
+
 2. Grant the following scopes:
 
-   | Scope              | Purpose                       |
-   |--------------------|-------------------------------|
-   | `okta.groups.read` | Read group names and members  |
-   | `okta.users.read`  | Read user profiles            |
+   | Scope              | Purpose                      |
+   | ------------------ | ---------------------------- |
+   | `okta.groups.read` | Read group names and members |
+   | `okta.users.read`  | Read user profiles           |
 
 3. Click **Grant** for each scope
 
@@ -82,22 +87,26 @@ API Services applications require an admin role to access Okta APIs. Without
 this, API calls will fail with permission errors even if scopes are granted.
 
 1. Go to the **Admin roles** tab for your application
+
 2. Click **Edit assignments**
+
 3. Select one of the following roles:
 
-   | Role                | Access Level                                  |
-   |---------------------|-----------------------------------------------|
-   | **Read Only Admin** | Read access to all resources (recommended)    |
-   | **Group Admin**     | Full access to groups only                    |
+   | Role                | Access Level                               |
+   | ------------------- | ------------------------------------------ |
+   | **Read Only Admin** | Read access to all resources (recommended) |
+   | **Group Admin**     | Full access to groups only                 |
 
 4. If using **Group Admin**, optionally restrict to specific groups:
-   - Under **Edit constraints for Group Administrator**, select specific
-     groups or group types the app can access
+
+   - Under **Edit constraints for Group Administrator**, select specific groups
+     or group types the app can access
+
 5. Click **Save changes**
 
-> **Note**: Read Only Admin is recommended for sync operations since it
-> provides sufficient access without write permissions. Group Admin is an
-> alternative if you need to limit the app's scope to group resources only.
+> **Note**: Read Only Admin is recommended for sync operations since it provides
+> sufficient access without write permissions. Group Admin is an alternative if
+> you need to limit the app's scope to group resources only.
 
 ## Step 7: Identify Your Okta Domain
 
@@ -113,12 +122,12 @@ Use the domain without `https://` prefix for `APP_OKTA_DOMAIN`.
 The app needs to map Okta users to GitHub usernames. Determine which Okta user
 profile field contains GitHub usernames:
 
-| Common Fields      | Description                              |
-|--------------------|------------------------------------------|
-| `login`            | Okta username (often email)              |
-| `email`            | User's email address                     |
-| `githubUsername`   | Custom field (recommended)               |
-| `nickName`         | Sometimes used for GitHub username       |
+| Common Fields    | Description                        |
+| ---------------- | ---------------------------------- |
+| `login`          | Okta username (often email)        |
+| `email`          | User's email address               |
+| `githubUsername` | Custom field (recommended)         |
+| `nickName`       | Sometimes used for GitHub username |
 
 ### Adding a Custom GitHub Username Field (Recommended)
 
@@ -141,13 +150,14 @@ rules:
 
 **Example naming conventions:**
 
-| Pattern              | Example Groups                               |
-|----------------------|----------------------------------------------|
-| `github-{team}`      | `github-engineering`, `github-platform`      |
-| `gh-eng-{team}`      | `gh-eng-frontend`, `gh-eng-backend`          |
-| `Team - {name}`      | `Team - Platform`, `Team - Security`         |
+| Pattern         | Example Groups                          |
+| --------------- | --------------------------------------- |
+| `github-{team}` | `github-engineering`, `github-platform` |
+| `gh-eng-{team}` | `gh-eng-frontend`, `gh-eng-backend`     |
+| `Team - {name}` | `Team - Platform`, `Team - Security`    |
 
 Groups can be:
+
 - Okta groups (manually managed)
 - Groups synced from Active Directory
 - Groups from other identity providers
@@ -192,18 +202,18 @@ APP_OKTA_SYNC_RULES='[
 
 ### Rule Fields
 
-| Field                   | Description                                          |
-|-------------------------|------------------------------------------------------|
-| `name`                  | Rule identifier (for logging)                        |
-| `enabled`               | Enable/disable rule (default: `true`)                |
-| `okta_group_pattern`    | Regex to match Okta groups                           |
-| `okta_group_name`       | Exact Okta group name (alternative to pattern)       |
-| `github_team_prefix`    | Prefix for generated GitHub team names               |
-| `github_team_name`      | Exact GitHub team name (overrides pattern)           |
-| `strip_prefix`          | Remove this prefix from Okta group name              |
-| `sync_members`          | Sync members between Okta and GitHub (default: `true`)|
-| `create_team_if_missing`| Auto-create GitHub teams if they don't exist         |
-| `team_privacy`          | GitHub team visibility: `secret` or `closed`         |
+| Field                    | Description                                            |
+| ------------------------ | ------------------------------------------------------ |
+| `name`                   | Rule identifier (for logging)                          |
+| `enabled`                | Enable/disable rule (default: `true`)                  |
+| `okta_group_pattern`     | Regex to match Okta groups                             |
+| `okta_group_name`        | Exact Okta group name (alternative to pattern)         |
+| `github_team_prefix`     | Prefix for generated GitHub team names                 |
+| `github_team_name`       | Exact GitHub team name (overrides pattern)             |
+| `strip_prefix`           | Remove this prefix from Okta group name                |
+| `sync_members`           | Sync members between Okta and GitHub (default: `true`) |
+| `create_team_if_missing` | Auto-create GitHub teams if they don't exist           |
+| `team_privacy`           | GitHub team visibility: `secret` or `closed`           |
 
 See the [main README](../README.md#okta-sync-rules) for additional examples.
 
@@ -221,6 +231,7 @@ Test your Okta configuration:
 ```
 
 Trigger a sync and verify:
+
 1. POST to `/scheduled/okta-sync` endpoint
 2. Check logs for groups discovered and teams synced
 3. Verify GitHub team memberships match Okta groups
@@ -249,6 +260,7 @@ Trigger a sync and verify:
 ### Rate limiting
 
 Okta has API rate limits. If you hit limits:
+
 - Reduce sync frequency
 - The app handles rate limit responses gracefully
 
