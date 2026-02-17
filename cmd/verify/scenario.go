@@ -10,8 +10,10 @@ import (
 	"os"
 	"time"
 
+	"github.com/cockroachdb/errors"
 	"github.com/cruxstack/github-ops-app/internal/app"
 	"github.com/cruxstack/github-ops-app/internal/config"
+	oktaclient "github.com/cruxstack/github-ops-app/internal/okta"
 )
 
 // TestScenario defines a test case with input events and expected outcomes.
@@ -65,73 +67,57 @@ func runScenario(ctx context.Context, scenario TestScenario, verbose bool, logge
 
 	tlsCert, certPool, err := generateSelfSignedCert()
 	if err != nil {
-		return fmt.Errorf("generate cert: %w", err)
+		return errors.Wrap(err, "failed to generate cert")
 	}
 
 	githubAppKey, err := generateOAuthPrivateKey()
 	if err != nil {
-		return fmt.Errorf("generate github app key: %w", err)
+		return errors.Wrap(err, "failed to generate github app key")
 	}
-	os.Setenv("APP_GITHUB_APP_PRIVATE_KEY", string(githubAppKey))
 
 	oauthKey, err := generateOAuthPrivateKey()
 	if err != nil {
-		return fmt.Errorf("generate oauth key: %w", err)
-	}
-	os.Setenv("APP_OKTA_CLIENT_ID", "test-client-id")
-	os.Setenv("APP_OKTA_PRIVATE_KEY", string(oauthKey))
-
-	githubServer := &http.Server{
-		Addr:    "localhost:9001",
-		Handler: githubMock,
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{tlsCert},
-		},
-	}
-	oktaServer := &http.Server{
-		Addr:    "localhost:9002",
-		Handler: oktaMock,
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{tlsCert},
-		},
-	}
-	slackServer := &http.Server{
-		Addr:    "localhost:9003",
-		Handler: slackMock,
-		TLSConfig: &tls.Config{
-			Certificates: []tls.Certificate{tlsCert},
-		},
+		return errors.Wrap(err, "failed to generate oauth key")
 	}
 
-	githubReady := make(chan bool)
-	oktaReady := make(chan bool)
-	slackReady := make(chan bool)
+	// use dynamic ports: bind to :0 and extract the assigned port
+	tlsConfig := &tls.Config{Certificates: []tls.Certificate{tlsCert}}
+
+	githubListener, err := tls.Listen("tcp", "localhost:0", tlsConfig)
+	if err != nil {
+		return errors.Wrap(err, "failed to listen github")
+	}
+	oktaListener, err := tls.Listen("tcp", "localhost:0", tlsConfig)
+	if err != nil {
+		githubListener.Close()
+		return errors.Wrap(err, "failed to listen okta")
+	}
+	slackListener, err := tls.Listen("tcp", "localhost:0", tlsConfig)
+	if err != nil {
+		githubListener.Close()
+		oktaListener.Close()
+		return errors.Wrap(err, "failed to listen slack")
+	}
+
+	githubServer := &http.Server{Handler: githubMock}
+	oktaServer := &http.Server{Handler: oktaMock}
+	slackServer := &http.Server{Handler: slackMock}
 
 	go func() {
-		githubReady <- true
-		if err := githubServer.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
+		if err := githubServer.Serve(githubListener); err != http.ErrServerClosed {
 			logger.Error("github mock server error", slog.String("error", err.Error()))
 		}
 	}()
-
 	go func() {
-		oktaReady <- true
-		if err := oktaServer.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
+		if err := oktaServer.Serve(oktaListener); err != http.ErrServerClosed {
 			logger.Error("okta mock server error", slog.String("error", err.Error()))
 		}
 	}()
-
 	go func() {
-		slackReady <- true
-		if err := slackServer.ListenAndServeTLS("", ""); err != http.ErrServerClosed {
+		if err := slackServer.Serve(slackListener); err != http.ErrServerClosed {
 			logger.Error("slack mock server error", slog.String("error", err.Error()))
 		}
 	}()
-
-	<-githubReady
-	<-oktaReady
-	<-slackReady
-	time.Sleep(100 * time.Millisecond)
 
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -141,17 +127,51 @@ func runScenario(ctx context.Context, scenario TestScenario, verbose bool, logge
 		slackServer.Shutdown(shutdownCtx)
 	}()
 
+	githubAddr := fmt.Sprintf("https://%s/", githubListener.Addr().String())
+	oktaAddr := fmt.Sprintf("https://%s", oktaListener.Addr().String())
+	slackAddr := fmt.Sprintf("https://%s/", slackListener.Addr().String())
+
+	// save and restore environment variables for isolation between scenarios
+	envKeys := []string{
+		"APP_GITHUB_APP_PRIVATE_KEY", "APP_OKTA_CLIENT_ID", "APP_OKTA_PRIVATE_KEY",
+		"APP_GITHUB_BASE_URL", "APP_SLACK_API_URL", "APP_OKTA_BASE_URL",
+		"APP_OKTA_ORPHANED_USER_NOTIFICATIONS",
+	}
+	for key := range scenario.ConfigOverrides {
+		envKeys = append(envKeys, key)
+	}
+	savedEnv := make(map[string]string, len(envKeys))
+	for _, key := range envKeys {
+		savedEnv[key] = os.Getenv(key)
+	}
+	defer func() {
+		for key, value := range savedEnv {
+			if value == "" {
+				os.Unsetenv(key)
+			} else {
+				os.Setenv(key, value)
+			}
+		}
+	}()
+
+	os.Setenv("APP_GITHUB_APP_PRIVATE_KEY", string(githubAppKey))
+	os.Setenv("APP_OKTA_CLIENT_ID", "test-client-id")
+	os.Setenv("APP_OKTA_PRIVATE_KEY", string(oauthKey))
+	os.Setenv("APP_GITHUB_BASE_URL", githubAddr)
+	os.Setenv("APP_SLACK_API_URL", slackAddr)
+	os.Setenv("APP_OKTA_BASE_URL", oktaAddr)
+
+	// save and restore http.DefaultTransport
+	savedTransport := http.DefaultTransport
+	defer func() { http.DefaultTransport = savedTransport }()
+
 	http.DefaultTransport = &http.Transport{
 		TLSClientConfig: &tls.Config{
 			RootCAs: certPool,
 		},
 	}
 
-	os.Setenv("APP_GITHUB_BASE_URL", "https://localhost:9001/")
-	os.Setenv("APP_SLACK_API_URL", "https://localhost:9003/")
-	os.Setenv("APP_OKTA_BASE_URL", "https://localhost:9002")
-
-	ctx = context.WithValue(ctx, "okta_tls_cert_pool", certPool)
+	ctx = oktaclient.WithCertPool(ctx, certPool)
 
 	if os.Getenv("APP_OKTA_ORPHANED_USER_NOTIFICATIONS") == "" {
 		os.Setenv("APP_OKTA_ORPHANED_USER_NOTIFICATIONS", "false")
@@ -163,27 +183,26 @@ func runScenario(ctx context.Context, scenario TestScenario, verbose bool, logge
 
 	cfg, err := config.NewConfig()
 	if err != nil {
-		return fmt.Errorf("config creation failed: %w", err)
+		return errors.Wrap(err, "config creation failed")
 	}
 
-	a, err := app.New(ctx, cfg)
+	appLogger := slog.New(&testHandler{prefix: "  ", verbose: verbose, w: os.Stdout})
+
+	a, err := app.NewApp(ctx, cfg, appLogger)
 	if err != nil {
-		return fmt.Errorf("app creation failed: %w", err)
+		return errors.Wrap(err, "app creation failed")
 	}
 
 	if verbose {
 		fmt.Printf("\n  Application Output:\n")
 	}
 
-	appLogger := slog.New(&testHandler{prefix: "  ", verbose: verbose, w: os.Stdout})
-	a.Logger = appLogger
-
 	var req app.Request
 	switch scenario.EventType {
 	case "scheduled_event":
 		var evt app.ScheduledEvent
 		if err := json.Unmarshal(scenario.EventPayload, &evt); err != nil {
-			return fmt.Errorf("unmarshal event payload failed: %w", err)
+			return errors.Wrap(err, "failed to unmarshal event payload")
 		}
 		req = app.Request{
 			Type:            app.RequestTypeScheduled,
@@ -204,26 +223,26 @@ func runScenario(ctx context.Context, scenario TestScenario, verbose bool, logge
 		}
 
 	default:
-		return fmt.Errorf("unknown event type: %s", scenario.EventType)
+		return errors.Newf("unknown event type: %s", scenario.EventType)
 	}
 
 	resp := a.HandleRequest(ctx, req)
 
 	var processErr error
 	if resp.StatusCode >= 400 {
-		processErr = fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(resp.Body))
+		processErr = errors.Newf("request failed with status %d: %s", resp.StatusCode, string(resp.Body))
 	}
 
 	if scenario.ExpectError {
 		if processErr == nil {
-			return fmt.Errorf("expected error but processing succeeded")
+			return errors.New("expected error but processing succeeded")
 		}
 		if verbose {
 			fmt.Printf("  ✓ Expected error occurred: %v\n", processErr)
 		}
 	} else {
 		if processErr != nil {
-			return fmt.Errorf("process event failed: %w", processErr)
+			return errors.Wrap(processErr, "process event failed")
 		}
 	}
 
@@ -242,6 +261,12 @@ func runScenario(ctx context.Context, scenario TestScenario, verbose bool, logge
 
 	if verbose {
 		fmt.Printf("\n")
+	}
+
+	if err := validateNoUnexpectedCalls(scenario.ExpectedCalls, allReqs); err != nil {
+		fmt.Printf("\n  Validation:\n")
+		fmt.Printf("  ✗ FAILED: %v\n", err)
+		return err
 	}
 
 	if err := validateExpectedCalls(scenario.ExpectedCalls, allReqs); err != nil {
@@ -294,7 +319,32 @@ func validateExpectedCalls(expected []ExpectedCall, allReqs map[string][]Request
 			}
 		}
 		if !found {
-			return fmt.Errorf("expected call not found: %s %s %s", exp.Service, exp.Method, exp.Path)
+			return errors.Newf("expected call not found: %s %s %s", exp.Service, exp.Method, exp.Path)
+		}
+	}
+	return nil
+}
+
+// validateNoUnexpectedCalls checks that no unexpected destructive API calls
+// were made. only flags DELETE calls to catch unintended member removal or
+// resource deletion.
+func validateNoUnexpectedCalls(expected []ExpectedCall, allReqs map[string][]RequestRecord) error {
+	for service, reqs := range allReqs {
+		for _, req := range reqs {
+			// only flag unexpected destructive calls
+			if req.Method != "DELETE" {
+				continue
+			}
+			matched := false
+			for _, exp := range expected {
+				if exp.Service == service && exp.Method == req.Method && matchPath(req.Path, exp.Path) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return errors.Newf("unexpected destructive call: %s %s %s", service, req.Method, req.Path)
+			}
 		}
 	}
 	return nil

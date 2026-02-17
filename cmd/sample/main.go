@@ -32,7 +32,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	a, err := app.New(ctx, cfg)
+	a, err := app.NewApp(ctx, cfg, logger)
 	if err != nil {
 		logger.Error("failed to initialize app", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -52,7 +52,11 @@ func main() {
 	}
 
 	for i, sample := range samples {
-		eventType := sample["event_type"].(string)
+		eventType, ok := sample["event_type"].(string)
+		if !ok {
+			logger.Error("missing or invalid event_type", slog.Int("sample", i))
+			os.Exit(1)
+		}
 
 		switch eventType {
 		case "okta_sync":

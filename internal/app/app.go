@@ -9,76 +9,17 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/cruxstack/github-ops-app/internal/config"
-	internalerrors "github.com/cruxstack/github-ops-app/internal/errors"
-	"github.com/cruxstack/github-ops-app/internal/github/client"
-	"github.com/cruxstack/github-ops-app/internal/notifiers"
-	"github.com/cruxstack/github-ops-app/internal/okta"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 )
 
 // App is the main application instance containing all clients and
-// configuration.
+// configuration. depends on domain interfaces, not concrete implementations.
 type App struct {
 	Config       *config.Config
 	Logger       *slog.Logger
-	GitHubClient *client.Client
-	OktaClient   *okta.Client
-	Notifier     *notifiers.SlackNotifier
-}
-
-// New creates a new App instance with configured clients.
-// Initializes GitHub, Okta, and Slack clients based on config.
-func New(ctx context.Context, cfg *config.Config) (*App, error) {
-	logger := config.NewLogger()
-
-	app := &App{
-		Config: cfg,
-		Logger: logger,
-	}
-
-	if cfg.IsGitHubConfigured() {
-		ghClient, err := client.NewAppClientWithBaseURL(
-			cfg.GitHubAppID,
-			cfg.GitHubInstallationID,
-			cfg.GitHubAppPrivateKey,
-			cfg.GitHubOrg,
-			cfg.GitHubBaseURL,
-		)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create github app client")
-		}
-		app.GitHubClient = ghClient
-	}
-
-	if cfg.IsOktaSyncEnabled() {
-		oktaClient, err := okta.NewClientWithContext(ctx, &okta.ClientConfig{
-			Domain:          cfg.OktaDomain,
-			ClientID:        cfg.OktaClientID,
-			PrivateKey:      cfg.OktaPrivateKey,
-			PrivateKeyID:    cfg.OktaPrivateKeyID,
-			Scopes:          cfg.OktaScopes,
-			GitHubUserField: cfg.OktaGitHubUserField,
-			BaseURL:         cfg.OktaBaseURL,
-		})
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create okta client")
-		}
-		app.OktaClient = oktaClient
-	}
-
-	if cfg.SlackEnabled {
-		channels := notifiers.SlackChannels{
-			Default:       cfg.SlackChannel,
-			PRBypass:      cfg.SlackChannelPRBypass,
-			OktaSync:      cfg.SlackChannelOktaSync,
-			OrphanedUsers: cfg.SlackChannelOrphanedUsers,
-		}
-		messages := notifiers.SlackMessages{
-			PRBypassFooterNote: cfg.SlackPRBypassFooterNote,
-		}
-		app.Notifier = notifiers.NewSlackNotifierWithAPIURL(cfg.SlackToken, channels, messages, cfg.SlackAPIURL)
-	}
-
-	return app, nil
+	GitHubClient domain.GitHubClient
+	OktaClient   domain.OktaClient
+	Notifier     domain.Notifier
 }
 
 // ScheduledEvent represents a generic scheduled event.
@@ -120,7 +61,7 @@ func (a *App) ProcessWebhook(ctx context.Context, payload []byte, eventType stri
 	case "membership":
 		return a.handleMembershipWebhook(ctx, payload)
 	default:
-		return errors.Wrapf(internalerrors.ErrInvalidEventType, "%s", eventType)
+		return errors.Wrapf(domain.ErrInvalidEventType, "%s", eventType)
 	}
 }
 

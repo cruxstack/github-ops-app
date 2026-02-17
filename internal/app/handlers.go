@@ -5,10 +5,9 @@ import (
 	"log/slog"
 
 	"github.com/cockroachdb/errors"
-	internalerrors "github.com/cruxstack/github-ops-app/internal/errors"
-	"github.com/cruxstack/github-ops-app/internal/github/client"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 	"github.com/cruxstack/github-ops-app/internal/github/webhooks"
-	"github.com/cruxstack/github-ops-app/internal/okta"
+	"github.com/cruxstack/github-ops-app/internal/sync"
 )
 
 // handleOktaSync executes Okta group synchronization to GitHub teams.
@@ -20,10 +19,10 @@ func (a *App) handleOktaSync(ctx context.Context) error {
 	}
 
 	if a.OktaClient == nil || a.GitHubClient == nil {
-		return errors.Wrap(internalerrors.ErrClientNotInit, "okta or github client")
+		return errors.Wrap(domain.ErrClientNotInit, "okta or github client")
 	}
 
-	syncer := okta.NewSyncer(a.OktaClient, a.GitHubClient, a.Config.OktaSyncRules, a.Config.OktaSyncSafetyThreshold, a.Logger)
+	syncer := sync.NewSyncer(a.OktaClient, a.GitHubClient, a.Config.OktaSyncRules, a.Config.OktaSyncSafetyThreshold, a.Logger)
 	syncResult, err := syncer.Sync(ctx)
 	if err != nil {
 		return errors.Wrap(err, "okta sync failed")
@@ -83,30 +82,14 @@ func (a *App) handlePullRequestWebhook(ctx context.Context, payload []byte) erro
 		return nil
 	}
 
-	ghClient := a.GitHubClient
-
-	if prEvent.GetInstallationID() != 0 && prEvent.GetInstallationID() != a.Config.GitHubInstallationID {
-		installClient, err := client.NewAppClientWithBaseURL(
-			a.Config.GitHubAppID,
-			prEvent.GetInstallationID(),
-			a.Config.GitHubAppPrivateKey,
-			a.Config.GitHubOrg,
-			a.Config.GitHubBaseURL,
-		)
-		if err != nil {
-			return errors.Wrapf(err, "failed to create client for installation %d", prEvent.GetInstallationID())
-		}
-		ghClient = installClient
-	}
-
-	if ghClient == nil {
-		return errors.Wrap(internalerrors.ErrClientNotInit, "github client")
+	if a.GitHubClient == nil {
+		return errors.Wrap(domain.ErrClientNotInit, "github client")
 	}
 
 	owner := prEvent.GetRepoOwner()
 	repo := prEvent.GetRepoName()
 
-	result, err := ghClient.CheckPRCompliance(ctx, owner, repo, prEvent.Number)
+	result, err := a.GitHubClient.CheckPRCompliance(ctx, owner, repo, prEvent.Number)
 	if err != nil {
 		return errors.Wrapf(err, "failed to check pr #%d compliance", prEvent.Number)
 	}

@@ -1,6 +1,7 @@
-// Package errors defines sentinel errors and domain types for the
-// application. uses cockroachdb/errors for automatic stack trace capture.
-package errors
+// Package domain defines shared business types, errors, and interfaces.
+// this package has zero internal imports and serves as the dependency
+// inversion layer for the application.
+package domain
 
 import "github.com/cockroachdb/errors"
 
@@ -39,5 +40,4 @@ var (
 	ErrClientNotInit       = errors.Mark(errors.New("client not initialized"), ConfigError)
 	ErrInvalidEventType    = errors.Mark(errors.New("unknown event type"), ValidationError)
 	ErrMissingOAuthCreds   = errors.Mark(errors.New("must provide either api token or oauth credentials"), ConfigError)
-	ErrOAuthTokenExpired   = errors.Mark(errors.New("oauth token expired"), AuthError)
 )

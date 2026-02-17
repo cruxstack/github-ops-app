@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/cockroachdb/errors"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 	"github.com/cruxstack/github-ops-app/internal/github/webhooks"
 )
 
@@ -72,7 +74,7 @@ func (a *App) handleScheduledRequest(ctx context.Context, req Request) Response 
 		a.Logger.Error("scheduled event processing failed",
 			slog.String("action", evt.Action),
 			slog.String("error", err.Error()))
-		return errorResponse(500, "scheduled event processing failed")
+		return mapErrorResponse(err, "scheduled event processing failed")
 	}
 
 	return jsonResponse(200, map[string]string{
@@ -145,14 +147,14 @@ func (a *App) handleWebhookRequest(ctx context.Context, req Request) Response {
 	); err != nil {
 		a.Logger.Warn("webhook signature validation failed",
 			slog.String("error", err.Error()))
-		return errorResponse(401, "unauthorized")
+		return mapErrorResponse(err, "unauthorized")
 	}
 
 	if err := a.ProcessWebhook(ctx, req.Body, eventType); err != nil {
 		a.Logger.Error("webhook processing failed",
 			slog.String("event_type", eventType),
 			slog.String("error", err.Error()))
-		return errorResponse(500, "webhook processing failed")
+		return mapErrorResponse(err, "webhook processing failed")
 	}
 
 	return Response{
@@ -184,6 +186,24 @@ func (a *App) handleScheduledHTTPRequest(ctx context.Context, req Request, path 
 	}
 
 	return a.handleScheduledRequest(ctx, scheduledReq)
+}
+
+// mapErrorResponse translates domain error types to appropriate HTTP status
+// codes. centralizes error-to-HTTP mapping in one place. uses errors.Is()
+// with domain marker instances since errors.Mark() sets identity markers.
+func mapErrorResponse(err error, fallbackMsg string) Response {
+	switch {
+	case errors.Is(err, domain.AuthError):
+		return errorResponse(401, "unauthorized")
+	case errors.Is(err, domain.ValidationError):
+		return errorResponse(400, fallbackMsg)
+	case errors.Is(err, domain.ConfigError):
+		return errorResponse(503, "service not configured")
+	case errors.Is(err, domain.APIError):
+		return errorResponse(502, fallbackMsg)
+	default:
+		return errorResponse(500, fallbackMsg)
+	}
 }
 
 // jsonResponse creates a JSON response with the given status and data.

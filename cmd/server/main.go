@@ -30,7 +30,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	appInst, err = app.New(ctx, cfg)
+	appInst, err = app.NewApp(ctx, cfg, logger)
 	if err != nil {
 		logger.Error("app init failed", slog.String("error", err.Error()))
 		os.Exit(1)
@@ -83,12 +83,12 @@ func main() {
 
 // httpHandler converts http.Request to app.Request and handles the response.
 func httpHandler(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
+	defer r.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20)) // 10MB limit
 	if err != nil {
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
 
 	headers := make(map[string]string)
 	for key, values := range r.Header {

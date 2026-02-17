@@ -5,17 +5,15 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/errors"
-	internalerrors "github.com/cruxstack/github-ops-app/internal/errors"
-	"github.com/cruxstack/github-ops-app/internal/github/client"
-	"github.com/cruxstack/github-ops-app/internal/okta"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 	"github.com/slack-go/slack"
 )
 
 // NotifyPRBypass sends a Slack notification when branch protection is
 // bypassed.
-func (s *SlackNotifier) NotifyPRBypass(ctx context.Context, result *client.PRComplianceResult, repoFullName string) error {
+func (s *SlackNotifier) NotifyPRBypass(ctx context.Context, result *domain.PRComplianceResult, repoFullName string) error {
 	if result.PR == nil {
-		return errors.Wrap(internalerrors.ErrMissingPRData, "pr result missing")
+		return errors.Wrap(domain.ErrMissingPRData, "pr result missing")
 	}
 
 	prURL := ""
@@ -90,14 +88,14 @@ func (s *SlackNotifier) NotifyPRBypass(ctx context.Context, result *client.PRCom
 }
 
 // NotifyOktaSync sends a Slack notification with Okta sync results.
-func (s *SlackNotifier) NotifyOktaSync(ctx context.Context, reports []*okta.SyncReport, githubOrg string) error {
+func (s *SlackNotifier) NotifyOktaSync(ctx context.Context, reports []*domain.SyncReport, githubOrg string) error {
 	if len(reports) == 0 {
 		return nil
 	}
 
 	// aggregate stats
 	var totalAdded, totalRemoved int
-	var rulesWithChanges, rulesWithoutChanges []*okta.SyncReport
+	var rulesWithChanges, rulesWithoutChanges []*domain.SyncReport
 	var allErrors []string
 	var allSkippedExternal, allSkippedNoGHUsername []string
 
@@ -239,7 +237,7 @@ func (s *SlackNotifier) NotifyOktaSync(ctx context.Context, reports []*okta.Sync
 
 // NotifyOrphanedUsers sends a Slack notification about organization members
 // not in any synced teams.
-func (s *SlackNotifier) NotifyOrphanedUsers(ctx context.Context, report *okta.OrphanedUsersReport) error {
+func (s *SlackNotifier) NotifyOrphanedUsers(ctx context.Context, report *domain.OrphanedUsersReport) error {
 	if report == nil || len(report.OrphanedUsers) == 0 {
 		return nil
 	}

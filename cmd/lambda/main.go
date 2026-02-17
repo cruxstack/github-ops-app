@@ -3,13 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 
 	awsevents "github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/cockroachdb/errors"
 	"github.com/cruxstack/github-ops-app/internal/app"
 	"github.com/cruxstack/github-ops-app/internal/config"
 )
@@ -27,10 +27,10 @@ func initApp() {
 
 		cfg, err := config.NewConfig()
 		if err != nil {
-			initErr = fmt.Errorf("config init failed: %w", err)
+			initErr = errors.Wrap(err, "config init failed")
 			return
 		}
-		appInst, initErr = app.New(context.Background(), cfg)
+		appInst, initErr = app.NewApp(context.Background(), cfg, logger)
 	})
 }
 
@@ -99,7 +99,7 @@ func EventBridgeHandler(ctx context.Context, evt awsevents.CloudWatchEvent) erro
 	resp := appInst.HandleRequest(ctx, req)
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("scheduled event failed: %s", string(resp.Body))
+		return errors.Newf("scheduled event failed: %s", string(resp.Body))
 	}
 
 	return nil
@@ -122,7 +122,7 @@ func UniversalHandler(ctx context.Context, event json.RawMessage) (any, error) {
 		return nil, EventBridgeHandler(ctx, eventBridgeEvent)
 	}
 
-	return nil, fmt.Errorf("unknown lambda event type")
+	return nil, errors.New("unknown lambda event type")
 }
 
 func main() {

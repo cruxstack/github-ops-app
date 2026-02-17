@@ -5,32 +5,14 @@ import (
 	"fmt"
 
 	"github.com/cockroachdb/errors"
-	internalerrors "github.com/cruxstack/github-ops-app/internal/errors"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 	"github.com/google/go-github/v79/github"
 )
-
-// ComplianceViolation represents a single branch protection rule violation.
-type ComplianceViolation struct {
-	Type        string
-	Description string
-}
-
-// PRComplianceResult contains PR compliance check results including
-// violations and user bypass permissions.
-type PRComplianceResult struct {
-	PR               *github.PullRequest
-	BaseBranch       string
-	Protection       *github.Protection
-	BranchRules      *github.BranchRules
-	Violations       []ComplianceViolation
-	UserHasBypass    bool
-	UserBypassReason string
-}
 
 // CheckPRCompliance verifies if a merged PR met branch protection
 // requirements. checks review requirements, status checks, and user bypass
 // permissions.
-func (c *Client) CheckPRCompliance(ctx context.Context, owner, repo string, prNumber int) (*PRComplianceResult, error) {
+func (c *Client) CheckPRCompliance(ctx context.Context, owner, repo string, prNumber int) (*domain.PRComplianceResult, error) {
 	if err := c.ensureValidToken(ctx); err != nil {
 		return nil, err
 	}
@@ -41,19 +23,19 @@ func (c *Client) CheckPRCompliance(ctx context.Context, owner, repo string, prNu
 	}
 
 	if pr == nil {
-		return nil, errors.Wrapf(internalerrors.ErrMissingPRData, "pr #%d returned nil", prNumber)
+		return nil, errors.Wrapf(domain.ErrMissingPRData, "pr #%d returned nil", prNumber)
 	}
 
 	if pr.Base == nil || pr.Base.Ref == nil {
-		return nil, errors.Wrapf(internalerrors.ErrMissingPRData, "pr #%d missing base branch", prNumber)
+		return nil, errors.Wrapf(domain.ErrMissingPRData, "pr #%d missing base branch", prNumber)
 	}
 
 	baseBranch := *pr.Base.Ref
 
-	result := &PRComplianceResult{
+	result := &domain.PRComplianceResult{
 		PR:         pr,
 		BaseBranch: baseBranch,
-		Violations: []ComplianceViolation{},
+		Violations: []domain.ComplianceViolation{},
 	}
 
 	// fetch legacy branch protection rules
@@ -68,8 +50,14 @@ func (c *Client) CheckPRCompliance(ctx context.Context, owner, repo string, prNu
 		result.BranchRules = branchRules
 	}
 
-	c.checkReviewRequirements(ctx, owner, repo, pr, result)
-	c.checkStatusRequirements(ctx, owner, repo, pr, result)
+	if err := c.checkReviewRequirements(ctx, owner, repo, pr, result); err != nil {
+		return nil, errors.Wrapf(err, "failed to check review requirements for pr #%d", prNumber)
+	}
+
+	if err := c.checkStatusRequirements(ctx, owner, repo, pr, result); err != nil {
+		return nil, errors.Wrapf(err, "failed to check status requirements for pr #%d", prNumber)
+	}
+
 	c.checkUserBypassPermission(ctx, owner, repo, pr, result)
 
 	return result, nil
@@ -77,7 +65,7 @@ func (c *Client) CheckPRCompliance(ctx context.Context, owner, repo string, prNu
 
 // checkReviewRequirements validates that PR had required approving reviews.
 // checks both legacy branch protection and repository rulesets.
-func (c *Client) checkReviewRequirements(ctx context.Context, owner, repo string, pr *github.PullRequest, result *PRComplianceResult) {
+func (c *Client) checkReviewRequirements(ctx context.Context, owner, repo string, pr *github.PullRequest, result *domain.PRComplianceResult) error {
 	requiredApprovals := 0
 
 	// check legacy branch protection
@@ -95,34 +83,45 @@ func (c *Client) checkReviewRequirements(ctx context.Context, owner, repo string
 	}
 
 	if requiredApprovals == 0 {
-		return
+		return nil
 	}
 
-	reviews, _, err := c.client.PullRequests.ListReviews(ctx, owner, repo, *pr.Number, nil)
+	reviews, _, err := c.client.PullRequests.ListReviews(ctx, owner, repo, *pr.Number, &github.ListOptions{PerPage: 100})
 	if err != nil {
-		return
+		return errors.Wrapf(err, "failed to list reviews for pr #%d in %s/%s", *pr.Number, owner, repo)
+	}
+
+	// deduplicate reviews per user, keeping only the latest state
+	latestReviewByUser := make(map[string]string)
+	for _, review := range reviews {
+		if review.User == nil || review.User.Login == nil || review.State == nil {
+			continue
+		}
+		latestReviewByUser[*review.User.Login] = *review.State
 	}
 
 	approvedCount := 0
-	for _, review := range reviews {
-		if review.State != nil && *review.State == "APPROVED" {
+	for _, state := range latestReviewByUser {
+		if state == "APPROVED" {
 			approvedCount++
 		}
 	}
 
 	if approvedCount < requiredApprovals {
-		result.Violations = append(result.Violations, ComplianceViolation{
+		result.Violations = append(result.Violations, domain.ComplianceViolation{
 			Type:        "insufficient_reviews",
 			Description: fmt.Sprintf("required %d approving reviews, had %d", requiredApprovals, approvedCount),
 		})
 	}
+
+	return nil
 }
 
 // checkStatusRequirements validates that required status checks passed.
 // checks both legacy branch protection and repository rulesets.
-func (c *Client) checkStatusRequirements(ctx context.Context, owner, repo string, pr *github.PullRequest, result *PRComplianceResult) {
+func (c *Client) checkStatusRequirements(ctx context.Context, owner, repo string, pr *github.PullRequest, result *domain.PRComplianceResult) error {
 	if pr.Head == nil || pr.Head.SHA == nil {
-		return
+		return nil
 	}
 
 	// collect required checks from both sources
@@ -147,12 +146,12 @@ func (c *Client) checkStatusRequirements(ctx context.Context, owner, repo string
 	}
 
 	if len(requiredChecks) == 0 {
-		return
+		return nil
 	}
 
 	combinedStatus, _, err := c.client.Repositories.GetCombinedStatus(ctx, owner, repo, *pr.Head.SHA, nil)
 	if err != nil {
-		return
+		return errors.Wrapf(err, "failed to get combined status for sha '%s' in %s/%s", *pr.Head.SHA, owner, repo)
 	}
 
 	passedChecks := make(map[string]bool)
@@ -162,19 +161,34 @@ func (c *Client) checkStatusRequirements(ctx context.Context, owner, repo string
 		}
 	}
 
+	// also check GitHub Actions check runs (modern repos use these instead
+	// of commit statuses)
+	checkRuns, _, err := c.client.Checks.ListCheckRunsForRef(ctx, owner, repo, *pr.Head.SHA, &github.ListCheckRunsOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
+	})
+	if err == nil && checkRuns != nil {
+		for _, run := range checkRuns.CheckRuns {
+			if run.Name != nil && run.Conclusion != nil && *run.Conclusion == "success" {
+				passedChecks[*run.Name] = true
+			}
+		}
+	}
+
 	for required := range requiredChecks {
 		if !passedChecks[required] {
-			result.Violations = append(result.Violations, ComplianceViolation{
+			result.Violations = append(result.Violations, domain.ComplianceViolation{
 				Type:        "missing_status_check",
 				Description: fmt.Sprintf("required check '%s' did not pass", required),
 			})
 		}
 	}
+
+	return nil
 }
 
 // checkUserBypassPermission checks if the user who merged the PR has admin or
 // maintainer permissions allowing bypass.
-func (c *Client) checkUserBypassPermission(ctx context.Context, owner, repo string, pr *github.PullRequest, result *PRComplianceResult) {
+func (c *Client) checkUserBypassPermission(ctx context.Context, owner, repo string, pr *github.PullRequest, result *domain.PRComplianceResult) {
 	if pr.MergedBy == nil || pr.MergedBy.Login == nil {
 		return
 	}
@@ -196,15 +210,4 @@ func (c *Client) checkUserBypassPermission(ctx context.Context, owner, repo stri
 			result.UserBypassReason = "repository maintainer"
 		}
 	}
-}
-
-// HasViolations returns true if any compliance violations were detected.
-func (r *PRComplianceResult) HasViolations() bool {
-	return len(r.Violations) > 0
-}
-
-// WasBypassed returns true if violations exist and user had bypass
-// permission.
-func (r *PRComplianceResult) WasBypassed() bool {
-	return r.HasViolations() && r.UserHasBypass
 }

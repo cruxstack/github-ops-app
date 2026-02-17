@@ -21,6 +21,7 @@ import (
 
 // Client wraps the GitHub API client with App authentication.
 // automatically refreshes installation tokens before expiry.
+// implements domain.GitHubClient.
 type Client struct {
 	client  *github.Client
 	org     string
@@ -144,14 +145,21 @@ func (c *Client) refreshToken(ctx context.Context) error {
 }
 
 // ensureValidToken refreshes the installation token if it expires within 5
-// minutes.
+// minutes. uses double-check pattern to avoid redundant refreshes under
+// concurrent access.
 func (c *Client) ensureValidToken(ctx context.Context) error {
 	c.tokenMu.RLock()
 	needsRefresh := time.Now().Add(5 * time.Minute).After(c.tokenExpAt)
 	c.tokenMu.RUnlock()
 
 	if needsRefresh {
-		return c.refreshToken(ctx)
+		c.tokenMu.Lock()
+		// double-check after acquiring write lock
+		if time.Now().Add(5 * time.Minute).After(c.tokenExpAt) {
+			c.tokenMu.Unlock()
+			return c.refreshToken(ctx)
+		}
+		c.tokenMu.Unlock()
 	}
 
 	return nil

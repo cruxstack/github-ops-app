@@ -7,8 +7,7 @@ import (
 	"testing"
 
 	"github.com/cruxstack/github-ops-app/internal/config"
-	"github.com/cruxstack/github-ops-app/internal/github/client"
-	"github.com/cruxstack/github-ops-app/internal/okta"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 )
 
 func TestHandleSlackTest_NotConfigured(t *testing.T) {
@@ -158,16 +157,11 @@ func TestProcessScheduledEvent_UnknownAction(t *testing.T) {
 	}
 }
 
-// verify fake data types match expected interfaces
+// verify fake data types match expected domain types
 func TestFakeDataTypes(t *testing.T) {
-	// ensure fake PR result is compatible with notifier
-	var _ *client.PRComplianceResult = fakePRComplianceResult()
-
-	// ensure fake sync reports are compatible with notifier
-	var _ []*okta.SyncReport = fakeOktaSyncReports()
-
-	// ensure fake orphaned users report is compatible with notifier
-	var _ *okta.OrphanedUsersReport = fakeOrphanedUsersReport()
+	var _ *domain.PRComplianceResult = fakePRComplianceResult()
+	var _ []*domain.SyncReport = fakeOktaSyncReports()
+	var _ *domain.OrphanedUsersReport = fakeOrphanedUsersReport()
 }
 
 func TestCheckAdminAuth(t *testing.T) {

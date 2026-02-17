@@ -18,7 +18,7 @@ type testHandler struct {
 
 // Enabled returns true for all log levels when verbose mode is enabled.
 func (h *testHandler) Enabled(_ context.Context, _ slog.Level) bool {
-	return true
+	return h.verbose
 }
 
 // Handle formats and writes log records to output with test-appropriate
