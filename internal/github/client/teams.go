@@ -3,20 +3,15 @@ package client
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/cockroachdb/errors"
-	internalerrors "github.com/cruxstack/github-ops-app/internal/errors"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 	"github.com/google/go-github/v79/github"
 )
 
-// TeamSyncResult contains the results of syncing team membership.
-type TeamSyncResult struct {
-	TeamName               string
-	MembersAdded           []string
-	MembersRemoved         []string
-	MembersSkippedExternal []string
-	Errors                 []string
-}
+// compile-time assertion
+var _ domain.GitHubClient = (*Client)(nil)
 
 // GetOrCreateTeam fetches an existing team by slug or creates it if missing.
 func (c *Client) GetOrCreateTeam(ctx context.Context, teamName, privacy string) (*github.Team, error) {
@@ -29,52 +24,64 @@ func (c *Client) GetOrCreateTeam(ctx context.Context, teamName, privacy string) 
 		return team, nil
 	}
 
-	if resp != nil && resp.StatusCode == 404 {
-		newTeam := &github.NewTeam{
-			Name:    teamName,
-			Privacy: &privacy,
-		}
-		team, _, err = c.client.Teams.CreateTeam(ctx, c.org, *newTeam)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to create team '%s' in org '%s'", teamName, c.org)
-		}
-		return team, nil
+	if resp == nil || resp.StatusCode != 404 {
+		return nil, errors.Wrapf(err, "failed to fetch team '%s' from org '%s'", teamName, c.org)
 	}
 
-	return nil, errors.Wrapf(internalerrors.ErrTeamNotFound, "failed to fetch team '%s' from org '%s'", teamName, c.org)
+	newTeam := &github.NewTeam{
+		Name:    teamName,
+		Privacy: &privacy,
+	}
+	team, _, err = c.client.Teams.CreateTeam(ctx, c.org, *newTeam)
+	if err != nil {
+		return nil, errors.Wrapf(err, "failed to create team '%s' in org '%s'", teamName, c.org)
+	}
+	return team, nil
 }
 
 // GetTeamMembers returns GitHub usernames of all team members.
+// paginates through all results to handle large teams.
 func (c *Client) GetTeamMembers(ctx context.Context, teamSlug string) ([]string, error) {
 	if err := c.ensureValidToken(ctx); err != nil {
 		return nil, err
 	}
 
-	members, _, err := c.client.Teams.ListTeamMembersBySlug(ctx, c.org, teamSlug, nil)
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to list members for team '%s'", teamSlug)
+	opts := &github.TeamListTeamMembersOptions{
+		ListOptions: github.ListOptions{PerPage: 100},
 	}
 
-	logins := make([]string, 0, len(members))
-	for _, member := range members {
-		if member.Login != nil {
-			logins = append(logins, *member.Login)
+	var allMembers []string
+	for {
+		members, resp, err := c.client.Teams.ListTeamMembersBySlug(ctx, c.org, teamSlug, opts)
+		if err != nil {
+			return nil, errors.Wrapf(err, "failed to list members for team '%s'", teamSlug)
 		}
+
+		for _, member := range members {
+			if member.Login != nil {
+				allMembers = append(allMembers, *member.Login)
+			}
+		}
+
+		if resp.NextPage == 0 {
+			break
+		}
+		opts.Page = resp.NextPage
 	}
 
-	return logins, nil
+	return allMembers, nil
 }
 
 // SyncTeamMembers adds and removes members to match desired state.
 // collects errors for individual operations but continues processing. skips
 // removal of external collaborators (outside org members). applies safety
 // threshold to prevent mass removal during outages.
-func (c *Client) SyncTeamMembers(ctx context.Context, teamSlug string, desiredMembers []string, safetyThreshold float64) (*TeamSyncResult, error) {
+func (c *Client) SyncTeamMembers(ctx context.Context, teamSlug string, desiredMembers []string, safetyThreshold float64) (*domain.TeamSyncResult, error) {
 	if err := c.ensureValidToken(ctx); err != nil {
 		return nil, err
 	}
 
-	result := &TeamSyncResult{
+	result := &domain.TeamSyncResult{
 		TeamName:               teamSlug,
 		MembersAdded:           []string{},
 		MembersRemoved:         []string{},
@@ -89,16 +96,16 @@ func (c *Client) SyncTeamMembers(ctx context.Context, teamSlug string, desiredMe
 
 	currentSet := make(map[string]bool)
 	for _, member := range currentMembers {
-		currentSet[member] = true
+		currentSet[strings.ToLower(member)] = true
 	}
 
 	desiredSet := make(map[string]bool)
 	for _, member := range desiredMembers {
-		desiredSet[member] = true
+		desiredSet[strings.ToLower(member)] = true
 	}
 
 	for _, desired := range desiredMembers {
-		if !currentSet[desired] {
+		if !currentSet[strings.ToLower(desired)] {
 			_, _, err := c.client.Teams.AddTeamMembershipBySlug(ctx, c.org, teamSlug, desired, nil)
 			if err != nil {
 				errMsg := fmt.Sprintf("failed to add '%s' to team '%s': %v", desired, teamSlug, err)
@@ -111,7 +118,7 @@ func (c *Client) SyncTeamMembers(ctx context.Context, teamSlug string, desiredMe
 
 	var toRemove []string
 	for _, current := range currentMembers {
-		if !desiredSet[current] {
+		if !desiredSet[strings.ToLower(current)] {
 			toRemove = append(toRemove, current)
 		}
 	}

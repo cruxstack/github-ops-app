@@ -1,6 +1,7 @@
 # GitHub App Setup
 
-This guide walks through creating and installing a GitHub App for github-ops-app.
+This guide walks through creating and installing a GitHub App for
+github-ops-app.
 
 ## Prerequisites
 
@@ -9,39 +10,50 @@ This guide walks through creating and installing a GitHub App for github-ops-app
 ## Step 1: Create the GitHub App
 
 1. Navigate to your organization's settings:
+
    - Go to `https://github.com/organizations/YOUR_ORG/settings/apps`
-   - Or: **Organization** → **Settings** → **Developer settings** → **GitHub Apps**
+   - Or: **Organization** → **Settings** → **Developer settings** → **GitHub
+     Apps**
 
 2. Click **New GitHub App**
 
 3. Fill in the basic information:
 
-    | Field                 | Value                                           |
-    |-----------------------|-------------------------------------------------|
-    | GitHub App name       | `github-ops-app` (must be unique across GitHub) |
-    | Homepage URL          | Your organization's URL or repo URL             |
-    | Webhook > Webhook URL | Leave blank for now                             |
-    | Webhook > Secret      | Generate a strong secret (save this for later)  |
-    | Webhook > Active      | **Uncheck** to disable webhooks initially       |
+   | Field                 | Value                                           |
+   | --------------------- | ----------------------------------------------- |
+   | GitHub App name       | `github-ops-app` (must be unique across GitHub) |
+   | Homepage URL          | Your organization's URL or repo URL             |
+   | Webhook > Webhook URL | Leave blank for now                             |
+   | Webhook > Secret      | Generate a strong secret (save this for later)  |
+   | Webhook > Active      | **Uncheck** to disable webhooks initially       |
 
-    > **Note**: Disable webhooks during creation since you may not know your
-    > endpoint URL until after deployment. You'll configure webhooks and
-    > subscribe to events in [Step 7](#step-7-configure-webhook-and-events).
+   > **Note**: Disable webhooks during creation since you may not know your
+   > endpoint URL until after deployment. You'll configure webhooks and
+   > subscribe to events in [Step 7](#step-7-configure-webhook-and-events).
 
-4. Under **Permissions**, set the following:
-   - Repository Permissions
-     - Contents: Read
-       - Read branch protection rules
-     - Pull requests: Read
-       - Access PR details for compliance
-   - Organization Permissions
-     - Administration: Read
-       - Read organization settings
-     - Members: Read/Write
-       - Manage team membership
+### Configure Permissions
 
-4. Under Set installation scope:
-   - Where can this GitHub App be installed?: Only on this account
+Under **Permissions**, set the following:
+
+### Repository Permissions
+
+| Permission    | Access | Purpose                          |
+| ------------- | ------ | -------------------------------- |
+| Contents      | Read   | Read branch protection rules     |
+| Pull requests | Read   | Access PR details for compliance |
+
+#### Organization Permissions
+
+| Permission     | Access     | Purpose                    |
+| -------------- | ---------- | -------------------------- |
+| Members        | Read/Write | Manage team membership     |
+| Administration | Read       | Read organization settings |
+
+4. Set installation scope:
+
+   | Setting                                 | Value                |
+   | --------------------------------------- | -------------------- |
+   | Where can this GitHub App be installed? | Only on this account |
 
 5. Click **Create GitHub App**
 
@@ -73,6 +85,7 @@ On the app's settings page, find and save:
 ## Step 5: Get Installation ID
 
 After installation, you'll be redirected to a URL like:
+
 ```
 https://github.com/organizations/YOUR_ORG/settings/installations/12345678
 ```
@@ -80,6 +93,7 @@ https://github.com/organizations/YOUR_ORG/settings/installations/12345678
 The number at the end (`12345678`) is your **Installation ID**.
 
 Alternatively, use the GitHub API:
+
 ```bash
 # List installations (requires app JWT authentication)
 curl -H "Authorization: Bearer YOUR_JWT" \
@@ -115,25 +129,40 @@ After deploying your server, configure and enable webhooks:
 
 1. Go to your GitHub App settings:
    `https://github.com/organizations/YOUR_ORG/settings/apps/YOUR_APP`
-2. On the **General** tab, under **Webhook**:
-   - Set **Webhook URL** to your endpoint:
-     - Lambda: `https://xxx.execute-api.region.amazonaws.com/webhooks`
-     - Server: `https://your-domain.com/webhooks`
-   - Check **Active** to enable webhooks
-   - Click **Save changes**
-3. Go to the **Permissions & events** tab
-4. Scroll to **Subscribe to events** and check:
+
+2. Set **Webhook URL** to your endpoint:
+
+   - Lambda: `https://xxx.execute-api.region.amazonaws.com/webhooks`
+   - Server: `https://your-domain.com/webhooks`
+
+3. Check **Active** to enable webhooks
+
+4. Click **Save changes**
+
+5. Under **Subscribe to events**, check:
+
    - [x] **Pull request** - PR open, close, merge events
    - [x] **Team** - Team creation, deletion, changes
    - [x] **Membership** - Team membership changes
-5. Click **Save changes**
+
+6. Click **Save changes**
+
+## Using the App Manifest (Alternative)
+
+For automated setup, use the manifest at `assets/github/manifest.json`:
+
+1. Go to `https://github.com/settings/apps/new`
+2. Append `?manifest=` with URL-encoded manifest JSON
+3. Or use the manifest creation API
+
+The manifest pre-configures all required permissions and events.
 
 ## Verification
 
 Test your setup:
 
-1. **Webhook delivery**: Check **Settings** → **Developer settings** →
-   **GitHub Apps** → your app → **Advanced** → **Recent Deliveries**
+1. **Webhook delivery**: Check **Settings** → **Developer settings** → **GitHub
+   Apps** → your app → **Advanced** → **Recent Deliveries**
 
 2. **Create a test PR**: Open and merge a PR to a monitored branch to verify
    webhook reception

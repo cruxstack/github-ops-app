@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/errors"
-	internalerrors "github.com/cruxstack/github-ops-app/internal/errors"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 	"github.com/google/go-github/v79/github"
 )
 
@@ -64,17 +64,17 @@ type MembershipEvent struct {
 func ValidateWebhookSignature(payload []byte, signature string, secret string) error {
 	if secret == "" {
 		if signature != "" {
-			return internalerrors.ErrUnexpectedSignature
+			return domain.ErrUnexpectedSignature
 		}
 		return nil
 	}
 
 	if signature == "" {
-		return internalerrors.ErrMissingSignature
+		return domain.ErrMissingSignature
 	}
 
 	if !strings.HasPrefix(signature, "sha256=") {
-		return errors.Wrap(internalerrors.ErrInvalidSignature, "must start with 'sha256='")
+		return errors.Wrap(domain.ErrInvalidSignature, "must start with 'sha256='")
 	}
 
 	mac := hmac.New(sha256.New, []byte(secret))
@@ -83,7 +83,7 @@ func ValidateWebhookSignature(payload []byte, signature string, secret string) e
 	expectedSignature := "sha256=" + expectedMAC
 
 	if !hmac.Equal([]byte(signature), []byte(expectedSignature)) {
-		return errors.Wrap(internalerrors.ErrInvalidSignature, "computed signature does not match")
+		return errors.Wrap(domain.ErrInvalidSignature, "computed signature does not match")
 	}
 
 	return nil
@@ -97,16 +97,16 @@ func ParsePullRequestEvent(payload []byte) (*PullRequestEvent, error) {
 		return nil, errors.Wrap(err, "failed to unmarshal pull request event")
 	}
 	if event.PullRequest == nil {
-		return nil, errors.Wrap(internalerrors.ErrMissingPRData, "missing pull_request field")
+		return nil, errors.Wrap(domain.ErrMissingPRData, "missing pull_request field")
 	}
 	if event.PullRequest.Number == nil {
-		return nil, errors.Wrap(internalerrors.ErrMissingPRData, "missing pr number")
+		return nil, errors.Wrap(domain.ErrMissingPRData, "missing pr number")
 	}
 	if event.PullRequest.Base == nil || event.PullRequest.Base.Ref == nil {
-		return nil, errors.Wrap(internalerrors.ErrMissingPRData, "missing base branch")
+		return nil, errors.Wrap(domain.ErrMissingPRData, "missing base branch")
 	}
 	if event.Repository == nil {
-		return nil, errors.Wrap(internalerrors.ErrMissingPRData, "missing repository")
+		return nil, errors.Wrap(domain.ErrMissingPRData, "missing repository")
 	}
 	return &event, nil
 }

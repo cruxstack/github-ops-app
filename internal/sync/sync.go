@@ -1,4 +1,6 @@
-package okta
+// Package sync coordinates synchronization of Okta groups to GitHub teams.
+// depends only on domain interfaces, not concrete client implementations.
+package sync
 
 import (
 	"context"
@@ -8,53 +10,24 @@ import (
 	"strings"
 
 	"github.com/cockroachdb/errors"
-	"github.com/cruxstack/github-ops-app/internal/github/client"
-	"github.com/cruxstack/github-ops-app/internal/types"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 )
 
-// SyncRule is an alias to types.SyncRule for convenience.
-type SyncRule = types.SyncRule
-
-// SyncReport contains the results of syncing a single Okta group to GitHub
-// team.
-type SyncReport struct {
-	Rule                       string
-	OktaGroup                  string
-	GitHubTeam                 string
-	MembersAdded               []string
-	MembersRemoved             []string
-	MembersSkippedExternal     []string
-	MembersSkippedNoGHUsername []string
-	Errors                     []string
-}
-
-// OrphanedUsersReport contains users who are org members but not in any synced
-// teams.
-type OrphanedUsersReport struct {
-	OrphanedUsers []string
-}
-
-// HasErrors returns true if any errors occurred during sync.
-func (r *SyncReport) HasErrors() bool {
-	return len(r.Errors) > 0
-}
-
-// HasChanges returns true if members were added or removed.
-func (r *SyncReport) HasChanges() bool {
-	return len(r.MembersAdded) > 0 || len(r.MembersRemoved) > 0
-}
+// teamNameNormalizer replaces non-alphanumeric characters (except hyphens)
+// in team names. compiled once at package init.
+var teamNameNormalizer = regexp.MustCompile(`[^a-z0-9-]+`)
 
 // Syncer coordinates synchronization of Okta groups to GitHub teams.
 type Syncer struct {
-	oktaClient      *Client
-	githubClient    *client.Client
-	rules           []SyncRule
+	oktaClient      domain.OktaClient
+	githubClient    domain.GitHubClient
+	rules           []domain.SyncRule
 	safetyThreshold float64
 	logger          *slog.Logger
 }
 
 // NewSyncer creates a new Okta to GitHub syncer.
-func NewSyncer(oktaClient *Client, githubClient *client.Client, rules []SyncRule, safetyThreshold float64, logger *slog.Logger) *Syncer {
+func NewSyncer(oktaClient domain.OktaClient, githubClient domain.GitHubClient, rules []domain.SyncRule, safetyThreshold float64, logger *slog.Logger) *Syncer {
 	return &Syncer{
 		oktaClient:      oktaClient,
 		githubClient:    githubClient,
@@ -64,22 +37,19 @@ func NewSyncer(oktaClient *Client, githubClient *client.Client, rules []SyncRule
 	}
 }
 
-// SyncResult contains all sync reports and orphaned users report.
-type SyncResult struct {
-	Reports       []*SyncReport
-	OrphanedUsers *OrphanedUsersReport
-}
-
 // Sync executes all enabled sync rules and returns reports.
 // continues processing remaining rules even if some fail.
-func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
-	var reports []*SyncReport
+func (s *Syncer) Sync(ctx context.Context) (*domain.SyncResult, error) {
+	var reports []*domain.SyncReport
+	var enabledRuleCount int
 	var failedRuleCount int
 
 	for _, rule := range s.rules {
 		if !rule.IsEnabled() {
 			continue
 		}
+
+		enabledRuleCount++
 
 		ruleReports, err := s.syncRule(ctx, rule)
 		if err != nil {
@@ -88,8 +58,7 @@ func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
 				slog.String("rule", rule.GetName()),
 				slog.String("error", err.Error()))
 
-			// create a report for the failed rule so error is visible
-			reports = append(reports, &SyncReport{
+			reports = append(reports, &domain.SyncReport{
 				Rule:       rule.GetName(),
 				OktaGroup:  rule.OktaGroupName,
 				GitHubTeam: rule.GitHubTeamName,
@@ -101,11 +70,11 @@ func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
 		reports = append(reports, ruleReports...)
 	}
 
-	if failedRuleCount > 0 && failedRuleCount == len(reports) {
+	if enabledRuleCount > 0 && failedRuleCount == enabledRuleCount {
 		return nil, errors.Newf("all sync rules failed: %d errors", failedRuleCount)
 	}
 
-	return &SyncResult{
+	return &domain.SyncResult{
 		Reports:       reports,
 		OrphanedUsers: nil,
 	}, nil
@@ -113,7 +82,7 @@ func (s *Syncer) Sync(ctx context.Context) (*SyncResult, error) {
 
 // DetectOrphanedUsers finds organization members not in any synced teams.
 // excludes external collaborators.
-func (s *Syncer) DetectOrphanedUsers(ctx context.Context, syncedTeams []string) (*OrphanedUsersReport, error) {
+func (s *Syncer) DetectOrphanedUsers(ctx context.Context, syncedTeams []string) (*domain.OrphanedUsersReport, error) {
 	orgMembers, err := s.githubClient.ListOrgMembers(ctx)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to list organization members")
@@ -150,34 +119,34 @@ func (s *Syncer) DetectOrphanedUsers(ctx context.Context, syncedTeams []string) 
 		}
 	}
 
-	return &OrphanedUsersReport{
+	return &domain.OrphanedUsersReport{
 		OrphanedUsers: orphanedUsers,
 	}, nil
 }
 
 // syncRule executes a single sync rule.
 // supports both pattern matching and exact group name matching.
-func (s *Syncer) syncRule(ctx context.Context, rule SyncRule) ([]*SyncReport, error) {
-	var reports []*SyncReport
+func (s *Syncer) syncRule(ctx context.Context, rule domain.SyncRule) ([]*domain.SyncReport, error) {
+	var reports []*domain.SyncReport
 
 	if rule.OktaGroupPattern != "" {
-		groups, err := s.oktaClient.GetGroupsByPattern(rule.OktaGroupPattern)
+		groups, err := s.oktaClient.GetGroupsByPattern(ctx, rule.OktaGroupPattern)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to match groups with pattern '%s'", rule.OktaGroupPattern)
 		}
 
 		for _, group := range groups {
-			teamName := s.computeTeamName(group.Name, rule)
+			teamName := computeTeamName(group.Name, rule)
 			report := s.syncGroupToTeam(ctx, rule, group, teamName)
 			reports = append(reports, report)
 		}
 	} else if rule.OktaGroupName != "" {
-		group, err := s.oktaClient.GetGroupInfo(rule.OktaGroupName)
+		group, err := s.oktaClient.GetGroupInfo(ctx, rule.OktaGroupName)
 		if err != nil {
 			return nil, errors.Wrapf(err, "failed to fetch group '%s'", rule.OktaGroupName)
 		}
 
-		teamName := s.computeTeamName(group.Name, rule)
+		teamName := computeTeamName(group.Name, rule)
 		report := s.syncGroupToTeam(ctx, rule, group, teamName)
 		reports = append(reports, report)
 	}
@@ -187,7 +156,7 @@ func (s *Syncer) syncRule(ctx context.Context, rule SyncRule) ([]*SyncReport, er
 
 // computeTeamName generates GitHub team name from Okta group name.
 // applies prefix stripping, prefix addition, and normalization.
-func (s *Syncer) computeTeamName(oktaGroupName string, rule SyncRule) string {
+func computeTeamName(oktaGroupName string, rule domain.SyncRule) string {
 	if rule.GitHubTeamName != "" {
 		return rule.GitHubTeamName
 	}
@@ -203,15 +172,16 @@ func (s *Syncer) computeTeamName(oktaGroupName string, rule SyncRule) string {
 	}
 
 	teamName = strings.ToLower(teamName)
-	teamName = regexp.MustCompile(`[^a-z0-9-]`).ReplaceAllString(teamName, "-")
+	teamName = teamNameNormalizer.ReplaceAllString(teamName, "-")
+	teamName = strings.Trim(teamName, "-")
 
 	return teamName
 }
 
 // syncGroupToTeam synchronizes a single Okta group to a GitHub team.
 // creates team if missing and syncs members if enabled.
-func (s *Syncer) syncGroupToTeam(ctx context.Context, rule SyncRule, group *GroupInfo, teamName string) *SyncReport {
-	report := &SyncReport{
+func (s *Syncer) syncGroupToTeam(ctx context.Context, rule domain.SyncRule, group *domain.GroupInfo, teamName string) *domain.SyncReport {
+	report := &domain.SyncReport{
 		Rule:                       rule.GetName(),
 		OktaGroup:                  group.Name,
 		GitHubTeam:                 teamName,

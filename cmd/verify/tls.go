@@ -7,9 +7,11 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"fmt"
 	"math/big"
+	"net"
 	"time"
+
+	"github.com/cockroachdb/errors"
 )
 
 // generateOAuthPrivateKey creates an RSA private key for OAuth testing.
@@ -17,7 +19,7 @@ import (
 func generateOAuthPrivateKey() ([]byte, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return nil, fmt.Errorf("generate oauth key: %w", err)
+		return nil, errors.Wrap(err, "failed to generate oauth key")
 	}
 
 	keyPEM := pem.EncodeToMemory(&pem.Block{
@@ -33,7 +35,7 @@ func generateOAuthPrivateKey() ([]byte, error) {
 func generateSelfSignedCert() (tls.Certificate, *x509.CertPool, error) {
 	priv, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
-		return tls.Certificate{}, nil, fmt.Errorf("generate key: %w", err)
+		return tls.Certificate{}, nil, errors.Wrap(err, "failed to generate key")
 	}
 
 	notBefore := time.Now()
@@ -41,7 +43,7 @@ func generateSelfSignedCert() (tls.Certificate, *x509.CertPool, error) {
 
 	serialNumber, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return tls.Certificate{}, nil, fmt.Errorf("generate serial: %w", err)
+		return tls.Certificate{}, nil, errors.Wrap(err, "failed to generate serial")
 	}
 
 	template := x509.Certificate{
@@ -56,11 +58,12 @@ func generateSelfSignedCert() (tls.Certificate, *x509.CertPool, error) {
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		BasicConstraintsValid: true,
 		DNSNames:              []string{"localhost"},
+		IPAddresses:           []net.IP{net.IPv4(127, 0, 0, 1), net.IPv6loopback},
 	}
 
 	certDER, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
 	if err != nil {
-		return tls.Certificate{}, nil, fmt.Errorf("create cert: %w", err)
+		return tls.Certificate{}, nil, errors.Wrap(err, "failed to create cert")
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
@@ -68,12 +71,12 @@ func generateSelfSignedCert() (tls.Certificate, *x509.CertPool, error) {
 
 	tlsCert, err := tls.X509KeyPair(certPEM, keyPEM)
 	if err != nil {
-		return tls.Certificate{}, nil, fmt.Errorf("create keypair: %w", err)
+		return tls.Certificate{}, nil, errors.Wrap(err, "failed to create keypair")
 	}
 
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
-		return tls.Certificate{}, nil, fmt.Errorf("parse cert: %w", err)
+		return tls.Certificate{}, nil, errors.Wrap(err, "failed to parse cert")
 	}
 
 	certPool := x509.NewCertPool()

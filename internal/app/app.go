@@ -6,79 +6,24 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"sync"
 
 	"github.com/cockroachdb/errors"
 	"github.com/cruxstack/github-ops-app/internal/config"
-	internalerrors "github.com/cruxstack/github-ops-app/internal/errors"
-	"github.com/cruxstack/github-ops-app/internal/github/client"
-	"github.com/cruxstack/github-ops-app/internal/notifiers"
-	"github.com/cruxstack/github-ops-app/internal/okta"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 )
 
 // App is the main application instance containing all clients and
-// configuration.
+// configuration. depends on domain interfaces, not concrete implementations.
 type App struct {
 	Config       *config.Config
 	Logger       *slog.Logger
-	GitHubClient *client.Client
-	OktaClient   *okta.Client
-	Notifier     *notifiers.SlackNotifier
-}
-
-// New creates a new App instance with configured clients.
-// Initializes GitHub, Okta, and Slack clients based on config.
-func New(ctx context.Context, cfg *config.Config) (*App, error) {
-	logger := config.NewLogger()
-
-	app := &App{
-		Config: cfg,
-		Logger: logger,
-	}
-
-	if cfg.IsGitHubConfigured() {
-		ghClient, err := client.NewAppClientWithBaseURL(
-			cfg.GitHubAppID,
-			cfg.GitHubInstallationID,
-			cfg.GitHubAppPrivateKey,
-			cfg.GitHubOrg,
-			cfg.GitHubBaseURL,
-		)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create github app client")
-		}
-		app.GitHubClient = ghClient
-	}
-
-	if cfg.IsOktaSyncEnabled() {
-		oktaClient, err := okta.NewClientWithContext(ctx, &okta.ClientConfig{
-			Domain:          cfg.OktaDomain,
-			ClientID:        cfg.OktaClientID,
-			PrivateKey:      cfg.OktaPrivateKey,
-			PrivateKeyID:    cfg.OktaPrivateKeyID,
-			Scopes:          cfg.OktaScopes,
-			GitHubUserField: cfg.OktaGitHubUserField,
-			BaseURL:         cfg.OktaBaseURL,
-		})
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to create okta client")
-		}
-		app.OktaClient = oktaClient
-	}
-
-	if cfg.SlackEnabled {
-		channels := notifiers.SlackChannels{
-			Default:       cfg.SlackChannel,
-			PRBypass:      cfg.SlackChannelPRBypass,
-			OktaSync:      cfg.SlackChannelOktaSync,
-			OrphanedUsers: cfg.SlackChannelOrphanedUsers,
-		}
-		messages := notifiers.SlackMessages{
-			PRBypassFooterNote: cfg.SlackPRBypassFooterNote,
-		}
-		app.Notifier = notifiers.NewSlackNotifierWithAPIURL(cfg.SlackToken, channels, messages, cfg.SlackAPIURL)
-	}
-
-	return app, nil
+	GitHubClient domain.GitHubClient
+	OktaClient   domain.OktaClient
+	Notifier     domain.Notifier
+	router       http.Handler
+	routerOnce   sync.Once
 }
 
 // ScheduledEvent represents a generic scheduled event.
@@ -87,9 +32,9 @@ type ScheduledEvent struct {
 	Data   json.RawMessage `json:"data,omitempty"`
 }
 
-// ProcessScheduledEvent handles scheduled events (e.g., cron jobs).
-// Routes to appropriate handlers based on event action.
-func (a *App) ProcessScheduledEvent(ctx context.Context, evt ScheduledEvent) error {
+// processScheduledEvent handles scheduled events (e.g., cron jobs).
+// routes to appropriate handlers based on event action.
+func (a *App) processScheduledEvent(ctx context.Context, evt ScheduledEvent) error {
 	if a.Config.DebugEnabled {
 		j, _ := json.Marshal(evt)
 		a.Logger.Debug("received scheduled event", slog.String("event", string(j)))
@@ -105,9 +50,9 @@ func (a *App) ProcessScheduledEvent(ctx context.Context, evt ScheduledEvent) err
 	}
 }
 
-// ProcessWebhook handles incoming GitHub webhook events.
-// Supports pull_request, team, and membership events.
-func (a *App) ProcessWebhook(ctx context.Context, payload []byte, eventType string) error {
+// processWebhook handles incoming GitHub webhook events.
+// supports pull_request, team, and membership events.
+func (a *App) processWebhook(ctx context.Context, payload []byte, eventType string) error {
 	if a.Config.DebugEnabled {
 		a.Logger.Debug("received webhook", slog.String("event_type", eventType))
 	}
@@ -120,7 +65,7 @@ func (a *App) ProcessWebhook(ctx context.Context, payload []byte, eventType stri
 	case "membership":
 		return a.handleMembershipWebhook(ctx, payload)
 	default:
-		return errors.Wrapf(internalerrors.ErrInvalidEventType, "%s", eventType)
+		return errors.Wrapf(domain.ErrInvalidEventType, "%s", eventType)
 	}
 }
 

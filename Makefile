@@ -43,3 +43,15 @@ test-verify:
 test-verify-verbose:
 	go run ./cmd/verify -verbose
 
+.PHONY: server-up
+server-up:
+	docker compose up -d --build
+
+.PHONY: server-logs
+server-logs:
+	docker compose logs -f server
+
+.PHONY: server-stop
+server-stop:
+	docker compose down --rmi local --remove-orphans
+

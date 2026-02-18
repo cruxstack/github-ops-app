@@ -1,15 +1,19 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 
 	awsevents "github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
+	"github.com/cockroachdb/errors"
 	"github.com/cruxstack/github-ops-app/internal/app"
 	"github.com/cruxstack/github-ops-app/internal/config"
 )
@@ -17,6 +21,7 @@ import (
 var (
 	initOnce sync.Once
 	appInst  *app.App
+	router   http.Handler
 	logger   *slog.Logger
 	initErr  error
 )
@@ -27,14 +32,19 @@ func initApp() {
 
 		cfg, err := config.NewConfig()
 		if err != nil {
-			initErr = fmt.Errorf("config init failed: %w", err)
+			initErr = errors.Wrap(err, "config init failed")
 			return
 		}
-		appInst, initErr = app.New(context.Background(), cfg)
+		appInst, initErr = app.NewApp(context.Background(), cfg, logger)
+		if initErr != nil {
+			return
+		}
+		router = appInst.Handler()
 	})
 }
 
-// APIGatewayHandler converts API Gateway requests to unified app.Request.
+// APIGatewayHandler converts API Gateway requests to stdlib *http.Request
+// and routes them through the chi router.
 func APIGatewayHandler(ctx context.Context, req awsevents.APIGatewayV2HTTPRequest) (awsevents.APIGatewayV2HTTPResponse, error) {
 	initApp()
 	if initErr != nil {
@@ -50,29 +60,35 @@ func APIGatewayHandler(ctx context.Context, req awsevents.APIGatewayV2HTTPReques
 		logger.Debug("received api gateway request", slog.String("request", string(j)))
 	}
 
-	headers := make(map[string]string)
+	httpReq, err := http.NewRequestWithContext(
+		ctx,
+		req.RequestContext.HTTP.Method,
+		req.RawPath,
+		strings.NewReader(req.Body),
+	)
+	if err != nil {
+		return awsevents.APIGatewayV2HTTPResponse{
+			StatusCode: 500,
+			Body:       "failed to construct http request",
+		}, nil
+	}
+
 	for key, value := range req.Headers {
-		headers[strings.ToLower(key)] = value
+		httpReq.Header.Set(key, value)
 	}
 
-	appReq := app.Request{
-		Type:    app.RequestTypeHTTP,
-		Method:  req.RequestContext.HTTP.Method,
-		Path:    req.RawPath,
-		Headers: headers,
-		Body:    []byte(req.Body),
-	}
-
-	resp := appInst.HandleRequest(ctx, appReq)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httpReq)
 
 	return awsevents.APIGatewayV2HTTPResponse{
-		StatusCode: resp.StatusCode,
-		Headers:    resp.Headers,
-		Body:       string(resp.Body),
+		StatusCode: rec.Code,
+		Headers:    flattenHeaders(rec.Header()),
+		Body:       rec.Body.String(),
 	}, nil
 }
 
-// EventBridgeHandler converts EventBridge events to unified app.Request.
+// EventBridgeHandler converts EventBridge events to POST /scheduled/{action}
+// requests and routes them through the chi router.
 func EventBridgeHandler(ctx context.Context, evt awsevents.CloudWatchEvent) error {
 	initApp()
 	if initErr != nil {
@@ -90,16 +106,30 @@ func EventBridgeHandler(ctx context.Context, evt awsevents.CloudWatchEvent) erro
 		return err
 	}
 
-	req := app.Request{
-		Type:            app.RequestTypeScheduled,
-		ScheduledAction: detail.Action,
-		ScheduledData:   detail.Data,
+	path := fmt.Sprintf("%s/scheduled/%s", appInst.Config.BasePath, detail.Action)
+
+	var body []byte
+	if detail.Data != nil {
+		body = detail.Data
 	}
 
-	resp := appInst.HandleRequest(ctx, req)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(body))
+	if err != nil {
+		return errors.Wrap(err, "failed to construct http request")
+	}
 
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("scheduled event failed: %s", string(resp.Body))
+	if appInst.Config.AdminToken != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+appInst.Config.AdminToken)
+	}
+	if len(body) > 0 {
+		httpReq.Header.Set("Content-Type", "application/json")
+	}
+
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httpReq)
+
+	if rec.Code >= 400 {
+		return errors.Newf("scheduled event failed: %s", rec.Body.String())
 	}
 
 	return nil
@@ -122,7 +152,18 @@ func UniversalHandler(ctx context.Context, event json.RawMessage) (any, error) {
 		return nil, EventBridgeHandler(ctx, eventBridgeEvent)
 	}
 
-	return nil, fmt.Errorf("unknown lambda event type")
+	return nil, errors.New("unknown lambda event type")
+}
+
+// flattenHeaders converts multi-value http.Header to single-value map.
+func flattenHeaders(h http.Header) map[string]string {
+	flat := make(map[string]string, len(h))
+	for key, values := range h {
+		if len(values) > 0 {
+			flat[key] = values[0]
+		}
+	}
+	return flat
 }
 
 func main() {

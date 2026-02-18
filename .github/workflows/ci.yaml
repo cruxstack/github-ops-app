@@ -46,10 +46,10 @@ jobs:
         with:
           go-version: '1.24'
 
-      - name: Run tests
+      - name: Run unit tests
         run: make test
 
-      - name: Run tests
+      - name: Run integration tests
         run: make test-verify-verbose
 
   build:

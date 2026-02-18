@@ -1,237 +1,195 @@
 package app
 
 import (
-	"context"
 	"encoding/json"
+	"io"
 	"log/slog"
+	"net/http"
 	"strings"
 
+	"github.com/cockroachdb/errors"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 	"github.com/cruxstack/github-ops-app/internal/github/webhooks"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
-// RequestType identifies the category of incoming request.
-type RequestType string
-
-const (
-	// RequestTypeHTTP represents HTTP requests (webhooks, status, config).
-	RequestTypeHTTP RequestType = "http"
-	// RequestTypeScheduled represents scheduled/cron events.
-	RequestTypeScheduled RequestType = "scheduled"
-)
-
-// Request is a unified request type that abstracts HTTP and scheduled events.
-// Runtimes (server, lambda) convert their native formats to this type.
-type Request struct {
-	Type    RequestType       `json:"type"`
-	Method  string            `json:"method,omitempty"`
-	Path    string            `json:"path,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Body    []byte            `json:"body,omitempty"`
-
-	// ScheduledAction is used for scheduled events (e.g., "okta-sync").
-	ScheduledAction string `json:"scheduled_action,omitempty"`
-	// ScheduledData contains optional payload for scheduled events.
-	ScheduledData json.RawMessage `json:"scheduled_data,omitempty"`
+// Handler returns the HTTP handler for the application.
+// this is the single entry point for all HTTP request processing.
+// both the server and lambda entry points feed requests into this handler.
+func (a *App) Handler() http.Handler {
+	a.routerOnce.Do(func() {
+		a.router = a.buildRouter()
+	})
+	return a.router
 }
 
-// Response is a unified response type returned by HandleRequest.
-// Runtimes convert this to their native response format.
-type Response struct {
-	StatusCode  int               `json:"status_code"`
-	Headers     map[string]string `json:"headers,omitempty"`
-	Body        []byte            `json:"body,omitempty"`
-	ContentType string            `json:"content_type,omitempty"`
+// buildRouter constructs the chi router with all routes and middleware.
+func (a *App) buildRouter() http.Handler {
+	r := chi.NewRouter()
+	r.Use(middleware.Recoverer)
+
+	basePath := a.Config.BasePath
+	if basePath == "" {
+		basePath = "/"
+	}
+
+	r.Route(basePath, func(r chi.Router) {
+		r.Post("/webhooks", a.handleWebhookHTTP)
+
+		r.Group(func(r chi.Router) {
+			r.Use(a.adminAuthMiddleware)
+			r.Get("/server/status", a.handleStatusHTTP)
+			r.Get("/server/config", a.handleConfigHTTP)
+			r.Post("/scheduled/{action}", a.handleScheduledHTTP)
+		})
+	})
+
+	return r
 }
 
-// HandleRequest routes incoming requests to the appropriate handler.
-// This is the single entry point for all request processing.
-func (a *App) HandleRequest(ctx context.Context, req Request) Response {
-	if a.Config.DebugEnabled {
-		j, _ := json.Marshal(req)
-		a.Logger.Debug("handling request", slog.String("request", string(j)))
-	}
+// adminAuthMiddleware validates the admin bearer token on protected routes.
+// if no admin token is configured, all requests pass through.
+func (a *App) adminAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if a.Config.AdminToken == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
 
-	switch req.Type {
-	case RequestTypeScheduled:
-		return a.handleScheduledRequest(ctx, req)
-	case RequestTypeHTTP:
-		return a.handleHTTPRequest(ctx, req)
-	default:
-		return errorResponse(400, "unknown request type")
-	}
-}
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
 
-// handleScheduledRequest processes scheduled/cron events.
-func (a *App) handleScheduledRequest(ctx context.Context, req Request) Response {
-	evt := ScheduledEvent{
-		Action: req.ScheduledAction,
-		Data:   req.ScheduledData,
-	}
+		token := strings.TrimPrefix(authHeader, "Bearer ")
+		if token == authHeader {
+			token = strings.TrimPrefix(authHeader, "bearer ")
+		}
 
-	if err := a.ProcessScheduledEvent(ctx, evt); err != nil {
-		a.Logger.Error("scheduled event processing failed",
-			slog.String("action", evt.Action),
-			slog.String("error", err.Error()))
-		return errorResponse(500, "scheduled event processing failed")
-	}
+		if token != a.Config.AdminToken {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
 
-	return jsonResponse(200, map[string]string{
-		"status":  "success",
-		"message": evt.Action + " completed",
+		next.ServeHTTP(w, r)
 	})
 }
 
-// handleHTTPRequest routes HTTP requests based on path.
-// strips BasePath prefix if configured (e.g., "/api/v1" -> "/").
-func (a *App) handleHTTPRequest(ctx context.Context, req Request) Response {
-	path := req.Path
-	if a.Config.BasePath != "" {
-		path = strings.TrimPrefix(path, a.Config.BasePath)
-		if path == "" {
-			path = "/"
-		}
-	}
-
-	switch path {
-	case "/server/status":
-		return a.handleStatusRequest(req)
-	case "/server/config":
-		return a.handleConfigRequest(req)
-	case "/webhooks", "/":
-		return a.handleWebhookRequest(ctx, req)
-	default:
-		if strings.HasPrefix(path, "/scheduled/") {
-			return a.handleScheduledHTTPRequest(ctx, req, path)
-		}
-		return errorResponse(404, "not found")
-	}
+// handleStatusHTTP returns application status.
+func (a *App) handleStatusHTTP(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.GetStatus())
 }
 
-// handleStatusRequest returns application status.
-func (a *App) handleStatusRequest(req Request) Response {
-	if req.Method != "GET" {
-		return errorResponse(405, "method not allowed")
-	}
-	if resp := a.checkAdminAuth(req); resp != nil {
-		return *resp
-	}
-	return jsonResponse(200, a.GetStatus())
+// handleConfigHTTP returns redacted configuration.
+func (a *App) handleConfigHTTP(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.Config.Redacted())
 }
 
-// handleConfigRequest returns redacted configuration.
-func (a *App) handleConfigRequest(req Request) Response {
-	if req.Method != "GET" {
-		return errorResponse(405, "method not allowed")
-	}
-	if resp := a.checkAdminAuth(req); resp != nil {
-		return *resp
-	}
-	return jsonResponse(200, a.Config.Redacted())
-}
-
-// handleWebhookRequest processes GitHub webhook POST requests.
-func (a *App) handleWebhookRequest(ctx context.Context, req Request) Response {
-	if req.Method != "POST" {
-		return errorResponse(405, "method not allowed")
+// handleWebhookHTTP processes GitHub webhook POST requests.
+func (a *App) handleWebhookHTTP(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20)) // 10MB limit
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "failed to read request body")
+		return
 	}
 
-	eventType := req.Headers["x-github-event"]
-	signature := req.Headers["x-hub-signature-256"]
+	eventType := r.Header.Get("X-GitHub-Event")
+	signature := r.Header.Get("X-Hub-Signature-256")
 
 	if err := webhooks.ValidateWebhookSignature(
-		req.Body,
+		body,
 		signature,
 		a.Config.GitHubWebhookSecret,
 	); err != nil {
 		a.Logger.Warn("webhook signature validation failed",
 			slog.String("error", err.Error()))
-		return errorResponse(401, "unauthorized")
+		writeErrorFromDomain(w, err, "unauthorized")
+		return
 	}
 
-	if err := a.ProcessWebhook(ctx, req.Body, eventType); err != nil {
+	if err := a.processWebhook(r.Context(), body, eventType); err != nil {
 		a.Logger.Error("webhook processing failed",
 			slog.String("event_type", eventType),
 			slog.String("error", err.Error()))
-		return errorResponse(500, "webhook processing failed")
+		writeErrorFromDomain(w, err, "webhook processing failed")
+		return
 	}
 
-	return Response{
-		StatusCode:  200,
-		ContentType: "text/plain",
-		Body:        []byte("ok"),
-	}
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok"))
 }
 
-// handleScheduledHTTPRequest processes scheduled events via HTTP POST.
-// path is the normalized path with BasePath already stripped.
-func (a *App) handleScheduledHTTPRequest(ctx context.Context, req Request, path string) Response {
-	if req.Method != "POST" {
-		return errorResponse(405, "method not allowed")
-	}
-	if resp := a.checkAdminAuth(req); resp != nil {
-		return *resp
-	}
-
-	// extract action from path (e.g., "/scheduled/okta-sync" -> "okta-sync")
-	action := strings.TrimPrefix(path, "/scheduled/")
+// handleScheduledHTTP processes scheduled events via HTTP POST.
+// the action is extracted from the chi URL parameter.
+func (a *App) handleScheduledHTTP(w http.ResponseWriter, r *http.Request) {
+	action := chi.URLParam(r, "action")
 	if action == "" {
-		return errorResponse(400, "missing scheduled action")
+		writeError(w, http.StatusBadRequest, "missing scheduled action")
+		return
 	}
 
-	scheduledReq := Request{
-		Type:            RequestTypeScheduled,
-		ScheduledAction: action,
+	evt := ScheduledEvent{Action: action}
+
+	if r.Body != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "failed to read request body")
+			return
+		}
+		if len(body) > 0 {
+			evt.Data = json.RawMessage(body)
+		}
 	}
 
-	return a.handleScheduledRequest(ctx, scheduledReq)
+	if err := a.processScheduledEvent(r.Context(), evt); err != nil {
+		a.Logger.Error("scheduled event processing failed",
+			slog.String("action", evt.Action),
+			slog.String("error", err.Error()))
+		writeErrorFromDomain(w, err, "scheduled event processing failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":  "success",
+		"message": evt.Action + " completed",
+	})
 }
 
-// jsonResponse creates a JSON response with the given status and data.
-func jsonResponse(status int, data any) Response {
+// writeJSON writes a JSON response with the given status code.
+func writeJSON(w http.ResponseWriter, status int, data any) {
 	body, err := json.Marshal(data)
 	if err != nil {
-		return errorResponse(500, "failed to marshal response")
+		writeError(w, http.StatusInternalServerError, "failed to marshal response")
+		return
 	}
-	return Response{
-		StatusCode:  status,
-		ContentType: "application/json",
-		Headers:     map[string]string{"Content-Type": "application/json"},
-		Body:        body,
-	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	w.Write(body)
 }
 
-// errorResponse creates an error response with the given status and message.
-func errorResponse(status int, message string) Response {
-	return Response{
-		StatusCode:  status,
-		ContentType: "text/plain",
-		Body:        []byte(message),
-	}
+// writeError writes a plain text error response.
+func writeError(w http.ResponseWriter, status int, message string) {
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(status)
+	w.Write([]byte(message))
 }
 
-// checkAdminAuth validates the admin token from the request.
-// returns nil if auth is disabled (no token configured) or if token is valid.
-// returns an error response if token is required but missing or invalid.
-func (a *App) checkAdminAuth(req Request) *Response {
-	if a.Config.AdminToken == "" {
-		return nil
+// writeErrorFromDomain translates domain error types to HTTP status codes
+// and writes the response. centralizes error-to-HTTP mapping.
+func writeErrorFromDomain(w http.ResponseWriter, err error, fallbackMsg string) {
+	switch {
+	case errors.Is(err, domain.AuthError):
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+	case errors.Is(err, domain.ValidationError):
+		writeError(w, http.StatusBadRequest, fallbackMsg)
+	case errors.Is(err, domain.ConfigError):
+		writeError(w, http.StatusServiceUnavailable, "service not configured")
+	case errors.Is(err, domain.APIError):
+		writeError(w, http.StatusBadGateway, fallbackMsg)
+	default:
+		writeError(w, http.StatusInternalServerError, fallbackMsg)
 	}
-
-	authHeader := req.Headers["authorization"]
-	if authHeader == "" {
-		resp := errorResponse(401, "unauthorized")
-		return &resp
-	}
-
-	token := strings.TrimPrefix(authHeader, "Bearer ")
-	if token == authHeader {
-		token = strings.TrimPrefix(authHeader, "bearer ")
-	}
-
-	if token != a.Config.AdminToken {
-		resp := errorResponse(401, "unauthorized")
-		return &resp
-	}
-
-	return nil
 }

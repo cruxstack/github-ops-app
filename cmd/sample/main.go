@@ -4,9 +4,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 
@@ -32,11 +36,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	a, err := app.New(ctx, cfg)
+	a, err := app.NewApp(ctx, cfg, logger)
 	if err != nil {
 		logger.Error("failed to initialize app", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
+
+	router := a.Handler()
 
 	path := filepath.Join("fixtures", "samples.json")
 	raw, err := os.ReadFile(path)
@@ -52,26 +58,51 @@ func main() {
 	}
 
 	for i, sample := range samples {
-		eventType := sample["event_type"].(string)
+		eventType, ok := sample["event_type"].(string)
+		if !ok {
+			logger.Error("missing or invalid event_type", slog.Int("sample", i))
+			os.Exit(1)
+		}
 
 		switch eventType {
 		case "okta_sync":
-			evt := app.ScheduledEvent{
-				Action: "okta-sync",
-			}
-			if err := a.ProcessScheduledEvent(ctx, evt); err != nil {
-				logger.Error("failed to process okta_sync sample",
+			reqPath := fmt.Sprintf("%s/scheduled/okta-sync", cfg.BasePath)
+			httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, reqPath, nil)
+			if err != nil {
+				logger.Error("failed to construct http request",
 					slog.Int("sample", i),
 					slog.String("error", err.Error()))
+				os.Exit(1)
+			}
+			if cfg.AdminToken != "" {
+				httpReq.Header.Set("Authorization", "Bearer "+cfg.AdminToken)
+			}
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httpReq)
+			if rec.Code >= 400 {
+				logger.Error("failed to process okta_sync sample",
+					slog.Int("sample", i),
+					slog.String("response", rec.Body.String()))
 				os.Exit(1)
 			}
 
 		case "pr_webhook":
 			payload, _ := json.Marshal(sample["payload"])
-			if err := a.ProcessWebhook(ctx, payload, "pull_request"); err != nil {
-				logger.Error("failed to process pr_webhook sample",
+			reqPath := fmt.Sprintf("%s/webhooks", cfg.BasePath)
+			httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, reqPath, bytes.NewReader(payload))
+			if err != nil {
+				logger.Error("failed to construct http request",
 					slog.Int("sample", i),
 					slog.String("error", err.Error()))
+				os.Exit(1)
+			}
+			httpReq.Header.Set("X-GitHub-Event", "pull_request")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, httpReq)
+			if rec.Code >= 400 {
+				logger.Error("failed to process pr_webhook sample",
+					slog.Int("sample", i),
+					slog.String("response", rec.Body.String()))
 				os.Exit(1)
 			}
 

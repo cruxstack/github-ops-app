@@ -15,7 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
 	"github.com/cockroachdb/errors"
-	"github.com/cruxstack/github-ops-app/internal/types"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 )
 
 // Config holds all application configuration loaded from environment
@@ -46,7 +46,7 @@ type Config struct {
 	OktaScopes                    []string
 	OktaBaseURL                   string
 	OktaGitHubUserField           string
-	OktaSyncRules                 []types.SyncRule
+	OktaSyncRules                 []domain.SyncRule
 	OktaSyncSafetyThreshold       float64
 	OktaOrphanedUserNotifications bool
 
@@ -259,7 +259,7 @@ func NewConfigWithContext(ctx context.Context) (*Config, error) {
 
 	syncRulesJSON := os.Getenv("APP_OKTA_SYNC_RULES")
 	if syncRulesJSON != "" {
-		var rules []types.SyncRule
+		var rules []domain.SyncRule
 		if err := json.Unmarshal([]byte(syncRulesJSON), &rules); err != nil {
 			return nil, errors.Wrap(err, "failed to parse APP_OKTA_SYNC_RULES")
 		}
@@ -363,16 +363,16 @@ type RedactedConfig struct {
 	PRMonitoredBranches []string `json:"pr_monitored_branches"`
 
 	// Okta
-	OktaDomain                    string           `json:"okta_domain"`
-	OktaClientID                  string           `json:"okta_client_id"`
-	OktaPrivateKey                string           `json:"okta_private_key"`
-	OktaPrivateKeyID              string           `json:"okta_private_key_id"`
-	OktaScopes                    []string         `json:"okta_scopes"`
-	OktaBaseURL                   string           `json:"okta_base_url"`
-	OktaGitHubUserField           string           `json:"okta_github_user_field"`
-	OktaSyncRules                 []types.SyncRule `json:"okta_sync_rules"`
-	OktaSyncSafetyThreshold       float64          `json:"okta_sync_safety_threshold"`
-	OktaOrphanedUserNotifications bool             `json:"okta_orphaned_user_notifications"`
+	OktaDomain                    string            `json:"okta_domain"`
+	OktaClientID                  string            `json:"okta_client_id"`
+	OktaPrivateKey                string            `json:"okta_private_key"`
+	OktaPrivateKeyID              string            `json:"okta_private_key_id"`
+	OktaScopes                    []string          `json:"okta_scopes"`
+	OktaBaseURL                   string            `json:"okta_base_url"`
+	OktaGitHubUserField           string            `json:"okta_github_user_field"`
+	OktaSyncRules                 []domain.SyncRule `json:"okta_sync_rules"`
+	OktaSyncSafetyThreshold       float64           `json:"okta_sync_safety_threshold"`
+	OktaOrphanedUserNotifications bool              `json:"okta_orphaned_user_notifications"`
 
 	// Slack
 	SlackEnabled              bool   `json:"slack_enabled"`

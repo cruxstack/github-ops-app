@@ -1,19 +1,18 @@
 package app
 
 import (
-	"github.com/cruxstack/github-ops-app/internal/github/client"
-	"github.com/cruxstack/github-ops-app/internal/okta"
+	"github.com/cruxstack/github-ops-app/internal/domain"
 	gh "github.com/google/go-github/v79/github"
 )
 
 // fakePRComplianceResult returns sample PR compliance data for testing.
-func fakePRComplianceResult() *client.PRComplianceResult {
+func fakePRComplianceResult() *domain.PRComplianceResult {
 	prNumber := 42
 	prTitle := "Add new authentication feature"
 	prURL := "https://github.com/acme-corp/demo-repo/pull/42"
 	mergedByLogin := "test-user"
 
-	return &client.PRComplianceResult{
+	return &domain.PRComplianceResult{
 		PR: &gh.PullRequest{
 			Number:  &prNumber,
 			Title:   &prTitle,
@@ -25,7 +24,7 @@ func fakePRComplianceResult() *client.PRComplianceResult {
 		BaseBranch:       "main",
 		UserHasBypass:    true,
 		UserBypassReason: "repository admin",
-		Violations: []client.ComplianceViolation{
+		Violations: []domain.ComplianceViolation{
 			{Type: "insufficient_reviews", Description: "required 2 approving reviews, had 0"},
 			{Type: "missing_status_check", Description: "required check 'ci/build' did not pass"},
 		},
@@ -33,8 +32,8 @@ func fakePRComplianceResult() *client.PRComplianceResult {
 }
 
 // fakeOktaSyncReports returns sample Okta sync reports for testing.
-func fakeOktaSyncReports() []*okta.SyncReport {
-	return []*okta.SyncReport{
+func fakeOktaSyncReports() []*domain.SyncReport {
+	return []*domain.SyncReport{
 		{
 			Rule:           "engineering-team",
 			OktaGroup:      "Engineering",
@@ -61,8 +60,8 @@ func fakeOktaSyncReports() []*okta.SyncReport {
 }
 
 // fakeOrphanedUsersReport returns sample orphaned users data for testing.
-func fakeOrphanedUsersReport() *okta.OrphanedUsersReport {
-	return &okta.OrphanedUsersReport{
+func fakeOrphanedUsersReport() *domain.OrphanedUsersReport {
+	return &domain.OrphanedUsersReport{
 		OrphanedUsers: []string{"orphan-user-1", "orphan-user-2", "legacy-bot"},
 	}
 }

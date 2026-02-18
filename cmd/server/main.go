@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -15,13 +13,8 @@ import (
 	"github.com/cruxstack/github-ops-app/internal/config"
 )
 
-var (
-	appInst *app.App
-	logger  *slog.Logger
-)
-
 func main() {
-	logger = config.NewLogger()
+	logger := config.NewLogger()
 	ctx := context.Background()
 
 	cfg, err := config.NewConfig()
@@ -30,14 +23,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	appInst, err = app.New(ctx, cfg)
+	appInst, err := app.NewApp(ctx, cfg, logger)
 	if err != nil {
 		logger.Error("app init failed", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", httpHandler)
 
 	port := os.Getenv("APP_PORT")
 	if port == "" {
@@ -46,7 +36,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:         ":" + port,
-		Handler:      mux,
+		Handler:      appInst.Handler(),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,
@@ -79,43 +69,4 @@ func main() {
 
 	<-done
 	logger.Info("server stopped")
-}
-
-// httpHandler converts http.Request to app.Request and handles the response.
-func httpHandler(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "failed to read request body", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	headers := make(map[string]string)
-	for key, values := range r.Header {
-		if len(values) > 0 {
-			headers[strings.ToLower(key)] = values[0]
-		}
-	}
-
-	req := app.Request{
-		Type:    app.RequestTypeHTTP,
-		Method:  r.Method,
-		Path:    r.URL.Path,
-		Headers: headers,
-		Body:    body,
-	}
-
-	resp := appInst.HandleRequest(r.Context(), req)
-
-	for key, value := range resp.Headers {
-		w.Header().Set(key, value)
-	}
-	if resp.ContentType != "" && w.Header().Get("Content-Type") == "" {
-		w.Header().Set("Content-Type", resp.ContentType)
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	if len(resp.Body) > 0 {
-		w.Write(resp.Body)
-	}
 }
