@@ -76,6 +76,10 @@ func (m *mockGitHubClient) GetAppSlug(ctx context.Context) (string, error) {
 	return "test-app", nil
 }
 
+func (m *mockGitHubClient) ListSecurityAlerts(ctx context.Context, minAgeDays int, minSeverity string) (*domain.SecurityAlertsReport, error) {
+	return &domain.SecurityAlertsReport{AlertsByRepo: map[string][]domain.SecurityAlert{}}, nil
+}
+
 func (m *mockGitHubClient) GetOrg() string {
 	return "test-org"
 }

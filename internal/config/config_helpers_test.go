@@ -125,6 +125,38 @@ func TestShouldMonitorBranch(t *testing.T) {
 	}
 }
 
+func TestIsSecurityAlertsEnabled(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  Config
+		want bool
+	}{
+		{name: "disabled flag", cfg: Config{SecurityAlertsEnabled: false}, want: false},
+		{
+			name: "enabled but no github",
+			cfg:  Config{SecurityAlertsEnabled: true},
+			want: false,
+		},
+		{
+			name: "enabled with github",
+			cfg: Config{
+				SecurityAlertsEnabled: true,
+				GitHubOrg:             "org", GitHubAppID: 1,
+				GitHubAppPrivateKey: []byte("k"), GitHubInstallationID: 1,
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.cfg.IsSecurityAlertsEnabled(); got != tt.want {
+				t.Errorf("IsSecurityAlertsEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRedacted(t *testing.T) {
 	cfg := Config{
 		GitHubOrg:           "my-org",

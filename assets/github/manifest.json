@@ -12,7 +12,11 @@
     "organization_administration": "read",
     "members": "write",
     "contents": "read",
-    "pull_requests": "read"
+    "pull_requests": "read",
+    "checks": "read",
+    "dependabot_alerts": "read",
+    "code_scanning_alerts": "read",
+    "secret_scanning_alerts": "read"
   },
   "default_events": [
     "pull_request",

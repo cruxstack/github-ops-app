@@ -8,6 +8,7 @@ alternatives like standard HTTP servers.
 
 The Lambda adapter translates AWS-specific events into the unified
 `app.HandleRequest()` interface:
+
 - **API Gateway** (webhooks, status, config) → `app.Request{Type: HTTP}`
 - **EventBridge** (scheduled sync) → `app.Request{Type: Scheduled}`
 
@@ -24,19 +25,20 @@ make build-lambda
 
 ### 1. Create Function
 
-* **Runtime**: `provided.al2023`
-* **Handler**: `bootstrap`
-* **Architecture**: `x86_64`
-* **Memory**: 256 MB
-* **Timeout**: 30 seconds
-* **IAM Role**: `AWSLambdaBasicExecutionRole` (no additional permissions needed)
+- **Runtime**: `provided.al2023`
+- **Handler**: `bootstrap`
+- **Architecture**: `x86_64`
+- **Memory**: 256 MB
+- **Timeout**: 30 seconds
+- **IAM Role**: `AWSLambdaBasicExecutionRole` (no additional permissions needed)
 
 ### 2. Upload Code
 
 Upload `dist/bootstrap` to your Lambda function via:
+
 - AWS Console (function code upload)
-- AWS CLI: `aws lambda update-function-code --function-name github-ops-app
-  --zip-file fileb://dist/bootstrap.zip`
+- AWS CLI:
+  `aws lambda update-function-code --function-name github-ops-app --zip-file fileb://dist/bootstrap.zip`
 - Infrastructure as Code (Terraform, CDK, CloudFormation)
 
 ### 3. Configure Environment Variables
@@ -59,22 +61,40 @@ Create an HTTP API Gateway:
 **Headers**: API Gateway automatically forwards all headers including
 `X-GitHub-Event` and `X-Hub-Signature-256`.
 
-#### EventBridge (for Scheduled Okta Sync)
+#### EventBridge (for Scheduled Tasks)
 
-Create an EventBridge rule:
+Create EventBridge rules for each scheduled feature you use:
+
+**Okta Sync** (sync Okta groups to GitHub teams):
 
 1. **Rule Type**: Schedule
-2. **Schedule**: 
-   - Rate: `rate(1 hour)` or `rate(6 hours)`
-   - Cron: `cron(0 */6 * * ? *)` (every 6 hours)
+2. **Schedule**: `rate(1 hour)` or `rate(6 hours)`
 3. **Target**: Lambda function
 4. **Input**: Configure constant (JSON):
+
 ```json
 {
   "source": "aws.events",
   "detail-type": "Scheduled Event",
   "detail": {
     "action": "okta-sync"
+  }
+}
+```
+
+**Security Alerts** (report stale security alerts):
+
+1. **Rule Type**: Schedule
+2. **Schedule**: `rate(1 day)` or `cron(0 9 ? * MON *)` (weekly Monday 9 AM)
+3. **Target**: Lambda function
+4. **Input**: Configure constant (JSON):
+
+```json
+{
+  "source": "aws.events",
+  "detail-type": "Scheduled Event",
+  "detail": {
+    "action": "security-alerts"
   }
 }
 ```
@@ -91,6 +111,7 @@ func UniversalHandler(ctx context.Context, event json.RawMessage) (any, error)
 ```
 
 **Supported Events**:
+
 - `APIGatewayV2HTTPRequest` → Converts to `app.Request{Type: HTTP}`
 - `CloudWatchEvent` (EventBridge) → Converts to `app.Request{Type: Scheduled}`
 
@@ -101,19 +122,21 @@ request type and path.
 
 When invoked via API Gateway:
 
-| Method | Path                   | Description                       |
-|--------|------------------------|-----------------------------------|
-| POST   | `/webhooks`            | GitHub webhook receiver           |
-| POST   | `/scheduled/okta-sync` | Trigger Okta sync                 |
-| POST   | `/scheduled/slack-test`| Send test notification to Slack   |
-| GET    | `/server/status`       | Health check and feature flags    |
-| GET    | `/server/config`       | Config inspection (secrets hidden)|
+| Method | Path                         | Description                        |
+| ------ | ---------------------------- | ---------------------------------- |
+| POST   | `/webhooks`                  | GitHub webhook receiver            |
+| POST   | `/scheduled/okta-sync`       | Trigger Okta sync                  |
+| POST   | `/scheduled/security-alerts` | Trigger security alerts check      |
+| POST   | `/scheduled/slack-test`      | Send test notification to Slack    |
+| GET    | `/server/status`             | Health check and feature flags     |
+| GET    | `/server/config`             | Config inspection (secrets hidden) |
 
 ## Monitoring
 
 ### CloudWatch Logs
 
 View logs:
+
 ```bash
 aws logs tail /aws/lambda/your-function-name --follow
 ```
@@ -121,6 +144,7 @@ aws logs tail /aws/lambda/your-function-name --follow
 ### Metrics
 
 Lambda automatically tracks:
+
 - Invocations
 - Duration
 - Errors
@@ -129,6 +153,7 @@ Lambda automatically tracks:
 ### Debug Mode
 
 Enable verbose logging:
+
 ```bash
 aws lambda update-function-configuration \
   --function-name github-ops-app \
@@ -140,9 +165,10 @@ aws lambda update-function-configuration \
 ### Memory Sizing
 
 Start with 256 MB and adjust based on CloudWatch metrics:
+
 - **Under-provisioned**: Slow response times, timeouts
 - **Over-provisioned**: Wasted cost
-- **Right-sized**: <100ms execution time for webhooks, <5s for sync
+- **Right-sized**: \<100ms execution time for webhooks, \<5s for sync
 
 ### Timeout
 
@@ -154,12 +180,14 @@ Start with 256 MB and adjust based on CloudWatch metrics:
 **Webhooks**: Pay-per-use (only when events occur)
 
 **Scheduled Sync**: Runs on schedule regardless of changes
+
 - Hourly sync: ~730 invocations/month
 - 6-hour sync: ~120 invocations/month
 
 **Cost Example** (us-east-1, 256MB, 5s avg):
+
 - Free tier: 1M requests, 400,000 GB-seconds/month
-- Typical usage: <1000 invocations/month → **free**
+- Typical usage: \<1000 invocations/month → **free**
 
 ## Troubleshooting
 
@@ -169,6 +197,7 @@ Start with 256 MB and adjust based on CloudWatch metrics:
 validation failed"
 
 **Solutions**:
+
 - Verify `APP_GITHUB_WEBHOOK_SECRET` matches GitHub App settings
 - Check API Gateway forwards `X-Hub-Signature-256` header
 - Ensure payload isn't modified by API Gateway (use proxy integration)
@@ -178,6 +207,7 @@ validation failed"
 **Symptom**: No sync activity in logs
 
 **Solutions**:
+
 - Verify EventBridge rule is **enabled**
 - Check rule target is configured correctly
 - Verify input payload has correct structure
@@ -188,6 +218,7 @@ validation failed"
 **Symptom**: Function execution exceeds configured timeout
 
 **Solutions**:
+
 - Increase timeout (max 15 minutes)
 - Reduce Okta sync scope (fewer rules/groups)
 - Check for slow API responses from GitHub/Okta
@@ -198,6 +229,7 @@ validation failed"
 **Symptom**: First webhook after idle period is slow
 
 **Solutions**:
+
 - Accept it (typically 100-500ms, GitHub webhooks tolerate this)
 - Use Lambda provisioned concurrency (increases cost)
 - Consider standard HTTP server for consistently low latency
@@ -217,7 +249,8 @@ No code changes needed - the core app is deployment-agnostic.
 ## Alternatives
 
 Consider non-Lambda deployments if you:
-- Need consistently low latency (<50ms)
+
+- Need consistently low latency (\<50ms)
 - Want to avoid AWS vendor lock-in
 - Prefer traditional server management
 - Have existing container infrastructure

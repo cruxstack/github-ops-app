@@ -211,6 +211,41 @@ func (a *App) shouldIgnoreWebhookChange(ctx context.Context, event webhookSender
 	return false
 }
 
+// handleSecurityAlerts checks for stale security alerts across the org
+// and sends a Slack notification if any are found.
+func (a *App) handleSecurityAlerts(ctx context.Context) error {
+	if !a.Config.IsSecurityAlertsEnabled() {
+		a.Logger.Info("security alerts monitoring is not enabled, skipping")
+		return nil
+	}
+
+	if a.GitHubClient == nil {
+		return errors.Wrap(domain.ErrClientNotInit, "github client")
+	}
+
+	report, err := a.GitHubClient.ListSecurityAlerts(
+		ctx,
+		a.Config.SecurityAlertsMinAgeDays,
+		a.Config.SecurityAlertsMinSeverity,
+	)
+	if err != nil {
+		return errors.Wrap(err, "failed to fetch stale security alerts")
+	}
+
+	a.Logger.Info("security alerts check completed",
+		slog.Int("total_alerts", report.TotalAlerts),
+		slog.Int("repos", report.RepoCount()))
+
+	if report.HasAlerts() && a.Notifier != nil {
+		if err := a.Notifier.NotifySecurityAlerts(ctx, report, a.Config.GitHubOrg); err != nil {
+			a.Logger.Warn("failed to send security alerts notification",
+				slog.String("error", err.Error()))
+		}
+	}
+
+	return nil
+}
+
 // handleSlackTest sends test notifications to Slack with sample data.
 // useful for verifying Slack connectivity and previewing message formats.
 func (a *App) handleSlackTest(ctx context.Context) error {
@@ -235,6 +270,12 @@ func (a *App) handleSlackTest(ctx context.Context) error {
 		return errors.Wrap(err, "failed to send test orphaned users notification")
 	}
 	a.Logger.Info("sent test orphaned users notification")
+
+	// test 4: Security alerts notification
+	if err := a.Notifier.NotifySecurityAlerts(ctx, fakeSecurityAlertsReport(), "acme-corp"); err != nil {
+		return errors.Wrap(err, "failed to send test security alerts notification")
+	}
+	a.Logger.Info("sent test security alerts notification")
 
 	return nil
 }

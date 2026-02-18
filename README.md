@@ -5,24 +5,25 @@ notifications. Deploy as AWS Lambda, standard HTTP server, or container.
 
 ## Features
 
-* **Okta group sync** - Automatically sync Okta groups to GitHub teams
-* **Orphaned user detection** - Identify org members not in any synced teams
-* **PR compliance monitoring** - Detect and notify when PRs bypass branch
+- **Okta group sync** - Automatically sync Okta groups to GitHub teams
+- **Orphaned user detection** - Identify org members not in any synced teams
+- **PR compliance monitoring** - Detect and notify when PRs bypass branch
   protection
-* **Automatic reconciliation** - Detects external team changes and triggers
-  sync
-* **Flexible configuration** - Enable only what you need via environment
+- **Security alerts monitoring** - Report stale Dependabot, code scanning, and
+  secret scanning alerts across the org
+- **Automatic reconciliation** - Detects external team changes and triggers sync
+- **Flexible configuration** - Enable only what you need via environment
   variables
-* **Slack notifications** - Rich messages for violations and sync reports
+- **Slack notifications** - Rich messages for violations and sync reports
 
 ## Quick Start
 
 ### Prerequisites
 
-* Go ≥ 1.24
-* GitHub App ([setup guide](docs/github-app-setup.md))
-* **Optional**: Okta API Service app ([setup guide](docs/okta-setup.md))
-* **Optional**: Slack app ([setup guide](docs/slack-setup.md))
+- Go ≥ 1.24
+- GitHub App ([setup guide](docs/github-app-setup.md))
+- **Optional**: Okta API Service app ([setup guide](docs/okta-setup.md))
+- **Optional**: Slack app ([setup guide](docs/slack-setup.md))
 
 ### Deployment Options
 
@@ -42,8 +43,9 @@ make build-server
 # server listens on APP_PORT (default: 8080)
 # endpoints:
 #   POST /webhooks              - GitHub webhook receiver
-#   POST /scheduled/okta-sync   - Trigger Okta sync (call via cron)
-#   POST /scheduled/slack-test  - Send test notification to Slack
+#   POST /scheduled/okta-sync       - Trigger Okta sync (call via cron)
+#   POST /scheduled/security-alerts - Trigger security alerts check
+#   POST /scheduled/slack-test      - Send test notification to Slack
 #   GET  /server/status         - Health check
 #   GET  /server/config         - Config (secrets redacted)
 ```
@@ -80,6 +82,7 @@ APP_GITHUB_WEBHOOK_SECRET=arn:aws:ssm:us-east-1:123456789012:parameter/github-bo
 ```
 
 **Requirements for SSM parameters**:
+
 - Valid AWS credentials with `ssm:GetParameter` permission
 - Full SSM parameter ARN in format:
   `arn:aws:ssm:REGION:ACCOUNT:parameter/path/to/param`
@@ -87,19 +90,19 @@ APP_GITHUB_WEBHOOK_SECRET=arn:aws:ssm:us-east-1:123456789012:parameter/github-bo
 
 ### Required: GitHub
 
-| Variable                            | Description                     |
-|-------------------------------------|---------------------------------|
-| `APP_GITHUB_APP_ID`                 | GitHub App ID                   |
-| `APP_GITHUB_APP_PRIVATE_KEY`        | Private key (PEM)               |
-| `APP_GITHUB_APP_PRIVATE_KEY_PATH`   | Path to private key file        |
-| `APP_GITHUB_INSTALLATION_ID`        | Installation ID                 |
-| `APP_GITHUB_ORG`                    | Organization name               |
-| `APP_GITHUB_WEBHOOK_SECRET`         | Webhook signature secret        |
+| Variable                          | Description              |
+| --------------------------------- | ------------------------ |
+| `APP_GITHUB_APP_ID`               | GitHub App ID            |
+| `APP_GITHUB_APP_PRIVATE_KEY`      | Private key (PEM)        |
+| `APP_GITHUB_APP_PRIVATE_KEY_PATH` | Path to private key file |
+| `APP_GITHUB_INSTALLATION_ID`      | Installation ID          |
+| `APP_GITHUB_ORG`                  | Organization name        |
+| `APP_GITHUB_WEBHOOK_SECRET`       | Webhook signature secret |
 
 ### Optional: Okta Sync
 
 | Variable                               | Description                                   |
-|----------------------------------------|-----------------------------------------------|
+| -------------------------------------- | --------------------------------------------- |
 | `APP_OKTA_DOMAIN`                      | Okta domain                                   |
 | `APP_OKTA_CLIENT_ID`                   | OAuth 2.0 client ID                           |
 | `APP_OKTA_PRIVATE_KEY`                 | Private key (PEM) or use                      |
@@ -111,28 +114,39 @@ APP_GITHUB_WEBHOOK_SECRET=arn:aws:ssm:us-east-1:123456789012:parameter/github-bo
 
 ### Optional: PR Compliance
 
-| Variable                         | Description                               |
-|----------------------------------|-------------------------------------------|
-| `APP_PR_COMPLIANCE_ENABLED`      | Enable monitoring (`true`)                |
-| `APP_PR_MONITORED_BRANCHES`      | Branches to monitor (e.g., `main,master`) |
+| Variable                    | Description                               |
+| --------------------------- | ----------------------------------------- |
+| `APP_PR_COMPLIANCE_ENABLED` | Enable monitoring (`true`)                |
+| `APP_PR_MONITORED_BRANCHES` | Branches to monitor (e.g., `main,master`) |
+
+### Optional: Security Alerts
+
+| Variable                           | Description                              |
+| ---------------------------------- | ---------------------------------------- |
+| `APP_SECURITY_ALERTS_ENABLED`      | Enable monitoring (`true`)               |
+| `APP_SECURITY_ALERTS_MIN_AGE_DAYS` | Min alert age in days (default: `30`)    |
+| `APP_SECURITY_ALERTS_MIN_SEVERITY` | Min severity threshold (default: `high`) |
+
+Severity options: `critical`, `high`, `medium`, `low`.
 
 ### Optional: Slack
 
-| Variable                          | Description                              |
-|-----------------------------------|------------------------------------------|
-| `APP_SLACK_TOKEN`                 | Bot token (`xoxb-...`)                   |
-| `APP_SLACK_CHANNEL`               | Default channel ID                       |
-| `APP_SLACK_CHANNEL_PR_BYPASS`     | Channel for PR bypass alerts (optional)  |
-| `APP_SLACK_CHANNEL_OKTA_SYNC`     | Channel for sync reports (optional)      |
-| `APP_SLACK_CHANNEL_ORPHANED_USERS`| Channel for orphan alerts (optional)     |
+| Variable                            | Description                             |
+| ----------------------------------- | --------------------------------------- |
+| `APP_SLACK_TOKEN`                   | Bot token (`xoxb-...`)                  |
+| `APP_SLACK_CHANNEL`                 | Default channel ID                      |
+| `APP_SLACK_CHANNEL_PR_BYPASS`       | Channel for PR bypass alerts (optional) |
+| `APP_SLACK_CHANNEL_OKTA_SYNC`       | Channel for sync reports (optional)     |
+| `APP_SLACK_CHANNEL_ORPHANED_USERS`  | Channel for orphan alerts (optional)    |
+| `APP_SLACK_CHANNEL_SECURITY_ALERTS` | Channel for security alerts (optional)  |
 
 ### Other
 
-| Variable                 | Description                                    |
-|--------------------------|------------------------------------------------|
-| `APP_PORT`               | Server port (default: `8080`)                  |
-| `APP_DEBUG_ENABLED`      | Verbose logging (default: `false`)             |
-| `APP_BASE_PATH`          | URL prefix to strip (e.g., `/api/v1`)          |
+| Variable            | Description                           |
+| ------------------- | ------------------------------------- |
+| `APP_PORT`          | Server port (default: `8080`)         |
+| `APP_DEBUG_ENABLED` | Verbose logging (default: `false`)    |
+| `APP_BASE_PATH`     | URL prefix to strip (e.g., `/api/v1`) |
 
 ### Okta Sync Rules
 
@@ -164,6 +178,7 @@ See [Okta Setup - Sync Rules](docs/okta-setup.md#step-10-configure-sync-rules)
 for detailed rule field documentation.
 
 **Sync Safety Features**:
+
 - Only syncs `ACTIVE` Okta users; never removes outside collaborators
 - Safety threshold (default 50%) aborts sync if too many removals detected
 - Orphaned user detection alerts when org members aren't in any synced teams
@@ -228,6 +243,13 @@ CMD ["/server"]
                     |  |  - map groups to teams       |  |
                     |  |  - sync membership           |  |
                     |  +------------------------------+  |
+                    |                                    |
+                    |  +------------------------------+  |
+                    |  |   Security Alerts Monitor    |  |
+                    |  |  - dependabot alerts         |  |
+                    |  |  - code scanning alerts      |  |
+                    |  |  - secret scanning alerts    |  |
+                    |  +------------------------------+  |
                     +------------------------------------+
 ```
 
@@ -245,12 +267,23 @@ CMD ["/server"]
 1. **Receive**: GitHub webhook on PR merge to monitored branch
 2. **Verify**: Validate webhook signature (HMAC-SHA256)
 3. **Check**: Query branch protection rules and required status checks
-4. **Detect**: Identify bypasses (admin override, missing reviews, failed checks)
+4. **Detect**: Identify bypasses (admin override, missing reviews, failed
+   checks)
 5. **Notify**: Send Slack alert with violation details
+
+### Security Alerts Flow
+
+1. **Trigger**: Scheduled cron/EventBridge (`POST /scheduled/security-alerts`)
+2. **Fetch**: Query Dependabot, code scanning, and secret scanning alerts across
+   the org
+3. **Filter**: Keep open alerts older than threshold (default 30 days) at or
+   above minimum severity (default high)
+4. **Report**: Send Slack notification summarizing stale alerts by repo
 
 ## Troubleshooting
 
 **Common issues**:
+
 - Unauthorized from GitHub: Check app installation and permissions
 - Group not found from Okta: Verify domain and scopes
 - Webhook signature fails: Verify `APP_GITHUB_WEBHOOK_SECRET` matches
@@ -259,4 +292,3 @@ CMD ["/server"]
 ## License
 
 MIT
-

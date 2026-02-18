@@ -117,6 +117,7 @@ APP_SLACK_CHANNEL=C01ABC2DEFG
 APP_SLACK_CHANNEL_PR_BYPASS=C01234ABCDE
 APP_SLACK_CHANNEL_OKTA_SYNC=C01234ABCDE
 APP_SLACK_CHANNEL_ORPHANED_USERS=C01234ABCDE
+APP_SLACK_CHANNEL_SECURITY_ALERTS=C01234ABCDE
 ```
 
 For AWS deployments, use SSM parameters:
@@ -167,12 +168,13 @@ Expected response:
 
 The bot sends these notification types:
 
-| Event                | Description                           |
-| -------------------- | ------------------------------------- |
-| PR Compliance Alert  | PR merged bypassing branch protection |
-| Okta Sync Report     | Summary of team membership changes    |
-| Orphaned Users Alert | Org members not in any synced teams   |
-| Sync Error           | Errors during Okta sync process       |
+| Event                  | Description                           |
+| ---------------------- | ------------------------------------- |
+| PR Compliance Alert    | PR merged bypassing branch protection |
+| Okta Sync Report       | Summary of team membership changes    |
+| Orphaned Users Alert   | Org members not in any synced teams   |
+| Security Alerts Report | Stale security alerts across the org  |
+| Sync Error             | Errors during Okta sync process       |
 
 ## Troubleshooting
 

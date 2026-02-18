@@ -8,10 +8,11 @@ import (
 // SlackChannels holds channel IDs for different notification types.
 // empty values fall back to the default channel.
 type SlackChannels struct {
-	Default       string
-	PRBypass      string
-	OktaSync      string
-	OrphanedUsers string
+	Default        string
+	PRBypass       string
+	OktaSync       string
+	OrphanedUsers  string
+	SecurityAlerts string
 }
 
 // SlackMessages holds optional custom messages for different notification

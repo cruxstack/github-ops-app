@@ -213,6 +213,124 @@ func TestNotifyOktaSync_WithErrors(t *testing.T) {
 	}
 }
 
+func TestNotifySecurityAlerts_NilReport(t *testing.T) {
+	notifier := NewSlackNotifier("xoxb-test", SlackChannels{Default: "C"}, SlackMessages{})
+
+	err := notifier.NotifySecurityAlerts(context.Background(), nil, "org")
+	if err != nil {
+		t.Fatalf("expected nil for nil report, got: %v", err)
+	}
+}
+
+func TestNotifySecurityAlerts_NoAlerts(t *testing.T) {
+	notifier := NewSlackNotifier("xoxb-test", SlackChannels{Default: "C"}, SlackMessages{})
+
+	report := &domain.SecurityAlertsReport{
+		TotalAlerts:  0,
+		AlertsByRepo: map[string][]domain.SecurityAlert{},
+	}
+	err := notifier.NotifySecurityAlerts(context.Background(), report, "org")
+	if err != nil {
+		t.Fatalf("expected nil for empty report, got: %v", err)
+	}
+}
+
+func TestNotifySecurityAlerts_Success(t *testing.T) {
+	srv, messages := slackTestServer(t)
+	defer srv.Close()
+
+	notifier := NewSlackNotifierWithAPIURL(
+		"xoxb-test",
+		SlackChannels{Default: "C_DEFAULT", SecurityAlerts: "C_SEC"},
+		SlackMessages{},
+		srv.URL+"/",
+	)
+
+	report := &domain.SecurityAlertsReport{
+		MinAgeDays:  30,
+		MinSeverity: "high",
+		TotalAlerts: 3,
+		AlertsByRepo: map[string][]domain.SecurityAlert{
+			"org/api": {
+				{Type: "dependabot", Severity: "critical", Number: 1},
+				{Type: "code_scanning", Severity: "high", Number: 5},
+			},
+			"org/web": {
+				{Type: "secret_scanning", Severity: "high", Number: 3},
+			},
+		},
+	}
+
+	err := notifier.NotifySecurityAlerts(context.Background(), report, "my-org")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	msg := <-messages
+	if msg == nil {
+		t.Fatal("expected a message to be posted")
+	}
+}
+
+func TestNotifySecurityAlerts_WithErrors(t *testing.T) {
+	srv, messages := slackTestServer(t)
+	defer srv.Close()
+
+	notifier := NewSlackNotifierWithAPIURL(
+		"xoxb-test",
+		SlackChannels{Default: "C"},
+		SlackMessages{},
+		srv.URL+"/",
+	)
+
+	report := &domain.SecurityAlertsReport{
+		MinAgeDays:  14,
+		MinSeverity: "medium",
+		TotalAlerts: 1,
+		AlertsByRepo: map[string][]domain.SecurityAlert{
+			"org/repo": {
+				{Type: "dependabot", Severity: "high", Number: 10},
+			},
+		},
+		Errors: []string{"failed to fetch code scanning alerts"},
+	}
+
+	err := notifier.NotifySecurityAlerts(context.Background(), report, "org")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	msg := <-messages
+	if msg == nil {
+		t.Fatal("expected a message")
+	}
+}
+
+func TestChannelFor_SecurityAlerts(t *testing.T) {
+	n := &SlackNotifier{
+		channels: SlackChannels{
+			Default:        "C_DEFAULT",
+			SecurityAlerts: "C_SEC",
+		},
+	}
+
+	if got := n.channelFor(n.channels.SecurityAlerts); got != "C_SEC" {
+		t.Errorf("expected C_SEC, got %s", got)
+	}
+}
+
+func TestChannelFor_SecurityAlertsFallback(t *testing.T) {
+	n := &SlackNotifier{
+		channels: SlackChannels{
+			Default: "C_DEFAULT",
+		},
+	}
+
+	if got := n.channelFor(n.channels.SecurityAlerts); got != "C_DEFAULT" {
+		t.Errorf("expected C_DEFAULT fallback, got %s", got)
+	}
+}
+
 func TestChannelFor_CustomChannels(t *testing.T) {
 	n := &SlackNotifier{
 		channels: SlackChannels{
