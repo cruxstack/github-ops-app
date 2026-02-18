@@ -3,6 +3,7 @@ package notifiers
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"github.com/cockroachdb/errors"
 	"github.com/cruxstack/github-ops-app/internal/domain"
@@ -282,4 +283,140 @@ func (s *SlackNotifier) NotifyOrphanedUsers(ctx context.Context, report *domain.
 	}
 
 	return nil
+}
+
+// maxReposInNotification limits the number of repositories shown in a
+// single Slack message to avoid exceeding block limits.
+const maxReposInNotification = 15
+
+// NotifySecurityAlerts sends a Slack notification summarizing open
+// security alerts across the organization.
+func (s *SlackNotifier) NotifySecurityAlerts(ctx context.Context, report *domain.SecurityAlertsReport, githubOrg string) error {
+	if report == nil || !report.HasAlerts() {
+		return nil
+	}
+
+	blocks := []slack.Block{
+		slack.NewHeaderBlock(
+			slack.NewTextBlockObject("plain_text",
+				"Security Alerts Report", false, false),
+		),
+		slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn",
+				fmt.Sprintf(
+					"*%d* open alert(s) across *%d* repository(s) in `%s`",
+					report.TotalAlerts,
+					report.RepoCount(),
+					githubOrg,
+				),
+				false, false),
+			nil, nil,
+		),
+	}
+
+	// repo list sorted by most alerts first
+	repos := sortedReposByAlertCount(report.AlertsByRepo)
+
+	repoLines := ""
+	for i, repo := range repos {
+		if i >= maxReposInNotification {
+			repoLines += fmt.Sprintf(
+				"\n_…and %d more_", len(repos)-i)
+			break
+		}
+
+		alerts := report.AlertsByRepo[repo]
+		highest := highestSeverity(alerts)
+		secURL := fmt.Sprintf(
+			"https://github.com/%s/security", repo)
+
+		repoLines += fmt.Sprintf("• <%s|%s> — %d alert(s), %s severity\n",
+			secURL, repo, len(alerts), highest)
+	}
+
+	blocks = append(blocks, slack.NewSectionBlock(
+		slack.NewTextBlockObject("mrkdwn", repoLines, false, false),
+		nil, nil,
+	))
+
+	if report.HasErrors() {
+		errText := "*Errors:*\n"
+		for _, e := range report.Errors {
+			errText += fmt.Sprintf("• %s\n", e)
+		}
+		blocks = append(blocks, slack.NewSectionBlock(
+			slack.NewTextBlockObject("mrkdwn", errText,
+				false, false),
+			nil, nil,
+		))
+	}
+
+	blocks = append(blocks, slack.NewContextBlock("",
+		slack.NewTextBlockObject("mrkdwn",
+			fmt.Sprintf(
+				"Filtered to open alerts older than %d days · severity %s or above",
+				report.MinAgeDays,
+				report.MinSeverity,
+			),
+			false, false),
+	))
+
+	channel := s.channelFor(s.channels.SecurityAlerts)
+	_, _, err := s.client.PostMessageContext(
+		ctx,
+		channel,
+		slack.MsgOptionBlocks(blocks...),
+		slack.MsgOptionText(
+			fmt.Sprintf("security alerts: %d open alerts across %d repos in %s",
+				report.TotalAlerts, report.RepoCount(), githubOrg),
+			false),
+	)
+
+	if err != nil {
+		return errors.Wrap(err,
+			"failed to post security alerts notification to slack")
+	}
+
+	return nil
+}
+
+// sortedReposByAlertCount returns repo names sorted by descending
+// alert count, with alphabetical tiebreak.
+func sortedReposByAlertCount(alertsByRepo map[string][]domain.SecurityAlert) []string {
+	repos := make([]string, 0, len(alertsByRepo))
+	for repo := range alertsByRepo {
+		repos = append(repos, repo)
+	}
+	sort.Slice(repos, func(i, j int) bool {
+		ci := len(alertsByRepo[repos[i]])
+		cj := len(alertsByRepo[repos[j]])
+		if ci != cj {
+			return ci > cj
+		}
+		return repos[i] < repos[j]
+	})
+	return repos
+}
+
+// highestSeverity returns the highest severity label among alerts.
+func highestSeverity(alerts []domain.SecurityAlert) string {
+	best := 0
+	for _, a := range alerts {
+		if r := severityRank[a.Severity]; r > best {
+			best = r
+		}
+	}
+	for _, sev := range []string{"critical", "high", "medium", "low"} {
+		if severityRank[sev] == best {
+			return sev
+		}
+	}
+	return "unknown"
+}
+
+var severityRank = map[string]int{
+	"critical": 4,
+	"high":     3,
+	"medium":   2,
+	"low":      1,
 }

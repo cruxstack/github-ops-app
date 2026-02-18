@@ -25,6 +25,7 @@ type mockGitHubClient struct {
 	listOrgMembersFn         func(ctx context.Context) ([]string, error)
 	isExternalCollaboratorFn func(ctx context.Context, username string) (bool, error)
 	getAppSlugFn             func(ctx context.Context) (string, error)
+	listSecurityAlertsFn     func(ctx context.Context, minAgeDays int, minSeverity string) (*domain.SecurityAlertsReport, error)
 }
 
 func (m *mockGitHubClient) CheckPRCompliance(ctx context.Context, owner, repo string, prNumber int) (*domain.PRComplianceResult, error) {
@@ -71,6 +72,12 @@ func (m *mockGitHubClient) GetAppSlug(ctx context.Context) (string, error) {
 	return "test-app", nil
 }
 func (m *mockGitHubClient) GetOrg() string { return "test-org" }
+func (m *mockGitHubClient) ListSecurityAlerts(ctx context.Context, minAgeDays int, minSeverity string) (*domain.SecurityAlertsReport, error) {
+	if m.listSecurityAlertsFn != nil {
+		return m.listSecurityAlertsFn(ctx, minAgeDays, minSeverity)
+	}
+	return &domain.SecurityAlertsReport{AlertsByRepo: map[string][]domain.SecurityAlert{}}, nil
+}
 
 type mockOktaClient struct {
 	getGroupsByPatternFn func(ctx context.Context, pattern string) ([]*domain.GroupInfo, error)
@@ -91,9 +98,10 @@ func (m *mockOktaClient) GetGroupInfo(ctx context.Context, groupName string) (*d
 }
 
 type mockNotifier struct {
-	notifyPRBypassFn      func(ctx context.Context, result *domain.PRComplianceResult, repoFullName string) error
-	notifyOktaSyncFn      func(ctx context.Context, reports []*domain.SyncReport, githubOrg string) error
-	notifyOrphanedUsersFn func(ctx context.Context, report *domain.OrphanedUsersReport) error
+	notifyPRBypassFn       func(ctx context.Context, result *domain.PRComplianceResult, repoFullName string) error
+	notifyOktaSyncFn       func(ctx context.Context, reports []*domain.SyncReport, githubOrg string) error
+	notifyOrphanedUsersFn  func(ctx context.Context, report *domain.OrphanedUsersReport) error
+	notifySecurityAlertsFn func(ctx context.Context, report *domain.SecurityAlertsReport, githubOrg string) error
 }
 
 func (m *mockNotifier) NotifyPRBypass(ctx context.Context, result *domain.PRComplianceResult, repoFullName string) error {
@@ -111,6 +119,12 @@ func (m *mockNotifier) NotifyOktaSync(ctx context.Context, reports []*domain.Syn
 func (m *mockNotifier) NotifyOrphanedUsers(ctx context.Context, report *domain.OrphanedUsersReport) error {
 	if m.notifyOrphanedUsersFn != nil {
 		return m.notifyOrphanedUsersFn(ctx, report)
+	}
+	return nil
+}
+func (m *mockNotifier) NotifySecurityAlerts(ctx context.Context, report *domain.SecurityAlertsReport, githubOrg string) error {
+	if m.notifySecurityAlertsFn != nil {
+		return m.notifySecurityAlertsFn(ctx, report, githubOrg)
 	}
 	return nil
 }
@@ -583,6 +597,176 @@ func TestRouter_BasePathStripping(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Errorf("expected 200 for base-path-stripped status, got %d (body: %s)",
 			rec.Code, rec.Body.String())
+	}
+}
+
+func TestHandleSecurityAlerts_Disabled(t *testing.T) {
+	a := &App{
+		Config: &config.Config{},
+		Logger: discardLogger(),
+	}
+
+	err := a.handleSecurityAlerts(context.Background())
+	if err != nil {
+		t.Fatalf("expected nil when disabled, got: %v", err)
+	}
+}
+
+func TestHandleSecurityAlerts_ClientNil(t *testing.T) {
+	a := &App{
+		Config: &config.Config{
+			SecurityAlertsEnabled: true,
+			GitHubOrg:             "org",
+			GitHubAppID:           1,
+			GitHubAppPrivateKey:   []byte("k"),
+			GitHubInstallationID:  1,
+		},
+		Logger: discardLogger(),
+	}
+
+	err := a.handleSecurityAlerts(context.Background())
+	if err == nil {
+		t.Fatal("expected error when client is nil")
+	}
+	if !errors.Is(err, domain.ErrClientNotInit) {
+		t.Errorf("expected ErrClientNotInit, got: %v", err)
+	}
+}
+
+func TestHandleSecurityAlerts_Success(t *testing.T) {
+	notified := false
+	a := &App{
+		Config: &config.Config{
+			SecurityAlertsEnabled:     true,
+			SecurityAlertsMinAgeDays:  30,
+			SecurityAlertsMinSeverity: "high",
+			GitHubOrg:                 "org",
+			GitHubAppID:               1,
+			GitHubAppPrivateKey:       []byte("k"),
+			GitHubInstallationID:      1,
+		},
+		Logger: discardLogger(),
+		GitHubClient: &mockGitHubClient{
+			listSecurityAlertsFn: func(_ context.Context, minAge int, minSev string) (*domain.SecurityAlertsReport, error) {
+				if minAge != 30 {
+					t.Errorf("expected minAge 30, got %d", minAge)
+				}
+				if minSev != "high" {
+					t.Errorf("expected minSev high, got %s", minSev)
+				}
+				return &domain.SecurityAlertsReport{
+					TotalAlerts: 2,
+					AlertsByRepo: map[string][]domain.SecurityAlert{
+						"org/repo": {{Type: "dependabot", Severity: "critical"}},
+					},
+				}, nil
+			},
+		},
+		Notifier: &mockNotifier{
+			notifySecurityAlertsFn: func(_ context.Context, report *domain.SecurityAlertsReport, org string) error {
+				notified = true
+				if report.TotalAlerts != 2 {
+					t.Errorf("expected 2 alerts, got %d", report.TotalAlerts)
+				}
+				if org != "org" {
+					t.Errorf("expected org, got %s", org)
+				}
+				return nil
+			},
+		},
+	}
+
+	err := a.handleSecurityAlerts(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !notified {
+		t.Error("expected notification to be sent")
+	}
+}
+
+func TestHandleSecurityAlerts_NoAlertsNoNotification(t *testing.T) {
+	notified := false
+	a := &App{
+		Config: &config.Config{
+			SecurityAlertsEnabled:     true,
+			SecurityAlertsMinAgeDays:  30,
+			SecurityAlertsMinSeverity: "high",
+			GitHubOrg:                 "org",
+			GitHubAppID:               1,
+			GitHubAppPrivateKey:       []byte("k"),
+			GitHubInstallationID:      1,
+		},
+		Logger: discardLogger(),
+		GitHubClient: &mockGitHubClient{
+			listSecurityAlertsFn: func(_ context.Context, _ int, _ string) (*domain.SecurityAlertsReport, error) {
+				return &domain.SecurityAlertsReport{
+					TotalAlerts:  0,
+					AlertsByRepo: map[string][]domain.SecurityAlert{},
+				}, nil
+			},
+		},
+		Notifier: &mockNotifier{
+			notifySecurityAlertsFn: func(_ context.Context, _ *domain.SecurityAlertsReport, _ string) error {
+				notified = true
+				return nil
+			},
+		},
+	}
+
+	err := a.handleSecurityAlerts(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if notified {
+		t.Error("should not notify when no alerts")
+	}
+}
+
+func TestHandleSecurityAlerts_NotifierFailureDoesNotFail(t *testing.T) {
+	a := &App{
+		Config: &config.Config{
+			SecurityAlertsEnabled:     true,
+			SecurityAlertsMinAgeDays:  30,
+			SecurityAlertsMinSeverity: "high",
+			GitHubOrg:                 "org",
+			GitHubAppID:               1,
+			GitHubAppPrivateKey:       []byte("k"),
+			GitHubInstallationID:      1,
+		},
+		Logger: discardLogger(),
+		GitHubClient: &mockGitHubClient{
+			listSecurityAlertsFn: func(_ context.Context, _ int, _ string) (*domain.SecurityAlertsReport, error) {
+				return &domain.SecurityAlertsReport{
+					TotalAlerts: 1,
+					AlertsByRepo: map[string][]domain.SecurityAlert{
+						"org/repo": {{Type: "dependabot"}},
+					},
+				}, nil
+			},
+		},
+		Notifier: &mockNotifier{
+			notifySecurityAlertsFn: func(_ context.Context, _ *domain.SecurityAlertsReport, _ string) error {
+				return errors.New("slack api error")
+			},
+		},
+	}
+
+	err := a.handleSecurityAlerts(context.Background())
+	if err != nil {
+		t.Fatalf("notifier failure should not propagate, got: %v", err)
+	}
+}
+
+func TestProcessScheduledEvent_SecurityAlerts(t *testing.T) {
+	a := &App{
+		Config: &config.Config{},
+		Logger: discardLogger(),
+	}
+
+	err := a.processScheduledEvent(context.Background(), ScheduledEvent{Action: "security-alerts"})
+	if err != nil {
+		t.Fatalf("expected nil when feature disabled, got: %v", err)
 	}
 }
 

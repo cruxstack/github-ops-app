@@ -36,6 +36,11 @@ type GitHubClient interface {
 
 	// GetOrg returns the GitHub organization name.
 	GetOrg() string
+
+	// ListSecurityAlerts fetches open security alerts across the org
+	// that are older than minAgeDays and at or above minSeverity.
+	// covers dependabot, code scanning, and secret scanning alerts.
+	ListSecurityAlerts(ctx context.Context, minAgeDays int, minSeverity string) (*SecurityAlertsReport, error)
 }
 
 // OktaClient defines the interface for Okta API operations.
@@ -61,4 +66,8 @@ type Notifier interface {
 	// NotifyOrphanedUsers sends a notification about organization members
 	// not in any synced teams.
 	NotifyOrphanedUsers(ctx context.Context, report *OrphanedUsersReport) error
+
+	// NotifySecurityAlerts sends a notification about stale security
+	// alerts across the organization.
+	NotifySecurityAlerts(ctx context.Context, report *SecurityAlertsReport, githubOrg string) error
 }

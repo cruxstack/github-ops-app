@@ -43,6 +43,8 @@ func (a *App) processScheduledEvent(ctx context.Context, evt ScheduledEvent) err
 	switch evt.Action {
 	case "okta-sync":
 		return a.handleOktaSync(ctx)
+	case "security-alerts":
+		return a.handleSecurityAlerts(ctx)
 	case "slack-test":
 		return a.handleSlackTest(ctx)
 	default:
@@ -71,20 +73,22 @@ func (a *App) processWebhook(ctx context.Context, payload []byte, eventType stri
 
 // StatusResponse contains application status and feature flags.
 type StatusResponse struct {
-	Status            string `json:"status"`
-	GitHubConfigured  bool   `json:"github_configured"`
-	OktaSyncEnabled   bool   `json:"okta_sync_enabled"`
-	PRComplianceCheck bool   `json:"pr_compliance_check"`
-	SlackEnabled      bool   `json:"slack_enabled"`
+	Status                string `json:"status"`
+	GitHubConfigured      bool   `json:"github_configured"`
+	OktaSyncEnabled       bool   `json:"okta_sync_enabled"`
+	PRComplianceCheck     bool   `json:"pr_compliance_check"`
+	SecurityAlertsEnabled bool   `json:"security_alerts_enabled"`
+	SlackEnabled          bool   `json:"slack_enabled"`
 }
 
 // GetStatus returns current application status and enabled features.
 func (a *App) GetStatus() StatusResponse {
 	return StatusResponse{
-		Status:            "ok",
-		GitHubConfigured:  a.Config.IsGitHubConfigured(),
-		OktaSyncEnabled:   a.Config.IsOktaSyncEnabled(),
-		PRComplianceCheck: a.Config.IsPRComplianceEnabled(),
-		SlackEnabled:      a.Config.SlackEnabled,
+		Status:                "ok",
+		GitHubConfigured:      a.Config.IsGitHubConfigured(),
+		OktaSyncEnabled:       a.Config.IsOktaSyncEnabled(),
+		PRComplianceCheck:     a.Config.IsPRComplianceEnabled(),
+		SecurityAlertsEnabled: a.Config.IsSecurityAlertsEnabled(),
+		SlackEnabled:          a.Config.SlackEnabled,
 	}
 }

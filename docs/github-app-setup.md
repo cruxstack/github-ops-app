@@ -37,10 +37,14 @@ Under **Permissions**, set the following:
 
 ### Repository Permissions
 
-| Permission    | Access | Purpose                          |
-| ------------- | ------ | -------------------------------- |
-| Contents      | Read   | Read branch protection rules     |
-| Pull requests | Read   | Access PR details for compliance |
+| Permission             | Access | Purpose                           |
+| ---------------------- | ------ | --------------------------------- |
+| Checks                 | Read   | Read status checks on PRs         |
+| Code scanning alerts   | Read   | Fetch open code scanning alerts   |
+| Contents               | Read   | Read branch protection rules      |
+| Dependabot alerts      | Read   | Fetch open Dependabot alerts      |
+| Pull requests          | Read   | Access PR details for compliance  |
+| Secret scanning alerts | Read   | Fetch open secret scanning alerts |
 
 #### Organization Permissions
 
@@ -48,6 +52,10 @@ Under **Permissions**, set the following:
 | -------------- | ---------- | -------------------------- |
 | Members        | Read/Write | Manage team membership     |
 | Administration | Read       | Read organization settings |
+
+> **Note**: The three security alert permissions are only required if you enable
+> security alerts monitoring (`APP_SECURITY_ALERTS_ENABLED=true`). You can omit
+> them if you don't use that feature.
 
 4. Set installation scope:
 

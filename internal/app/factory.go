@@ -52,10 +52,11 @@ func NewApp(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*App,
 
 	if cfg.SlackEnabled {
 		channels := notifiers.SlackChannels{
-			Default:       cfg.SlackChannel,
-			PRBypass:      cfg.SlackChannelPRBypass,
-			OktaSync:      cfg.SlackChannelOktaSync,
-			OrphanedUsers: cfg.SlackChannelOrphanedUsers,
+			Default:        cfg.SlackChannel,
+			PRBypass:       cfg.SlackChannelPRBypass,
+			OktaSync:       cfg.SlackChannelOktaSync,
+			OrphanedUsers:  cfg.SlackChannelOrphanedUsers,
+			SecurityAlerts: cfg.SlackChannelSecurityAlerts,
 		}
 		messages := notifiers.SlackMessages{
 			PRBypassFooterNote: cfg.SlackPRBypassFooterNote,

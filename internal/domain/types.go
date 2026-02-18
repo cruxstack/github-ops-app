@@ -1,6 +1,10 @@
 package domain
 
-import "github.com/google/go-github/v79/github"
+import (
+	"time"
+
+	"github.com/google/go-github/v79/github"
+)
 
 // SyncRule defines how to sync Okta groups to GitHub teams.
 type SyncRule struct {
@@ -123,4 +127,41 @@ type OrphanedUsersReport struct {
 type SyncResult struct {
 	Reports       []*SyncReport
 	OrphanedUsers *OrphanedUsersReport
+}
+
+// SecurityAlert represents a normalized security alert from any source
+// (dependabot, code scanning, or secret scanning).
+type SecurityAlert struct {
+	Type      string
+	Repo      string
+	Number    int
+	Severity  string
+	Summary   string
+	HTMLURL   string
+	CreatedAt time.Time
+	AgeDays   int
+}
+
+// SecurityAlertsReport contains stale security alerts grouped by repo.
+type SecurityAlertsReport struct {
+	MinAgeDays   int
+	MinSeverity  string
+	TotalAlerts  int
+	AlertsByRepo map[string][]SecurityAlert
+	Errors       []string
+}
+
+// HasAlerts returns true if any stale alerts were found.
+func (r *SecurityAlertsReport) HasAlerts() bool {
+	return r.TotalAlerts > 0
+}
+
+// HasErrors returns true if any errors occurred during alert fetching.
+func (r *SecurityAlertsReport) HasErrors() bool {
+	return len(r.Errors) > 0
+}
+
+// RepoCount returns the number of repos with stale alerts.
+func (r *SecurityAlertsReport) RepoCount() int {
+	return len(r.AlertsByRepo)
 }
