@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/cockroachdb/errors"
@@ -500,7 +502,7 @@ func TestProcessWebhook_UnknownEventType(t *testing.T) {
 		Logger: discardLogger(),
 	}
 
-	err := a.ProcessWebhook(context.Background(), []byte(`{}`), "deployment")
+	err := a.processWebhook(context.Background(), []byte(`{}`), "deployment")
 	if err == nil {
 		t.Fatal("expected error for unknown event type")
 	}
@@ -509,7 +511,7 @@ func TestProcessWebhook_UnknownEventType(t *testing.T) {
 	}
 }
 
-func TestMapErrorResponse(t *testing.T) {
+func TestWriteErrorFromDomain(t *testing.T) {
 	tests := []struct {
 		name       string
 		err        error
@@ -526,50 +528,61 @@ func TestMapErrorResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			resp := mapErrorResponse(tt.err, "fallback")
-			if resp.StatusCode != tt.wantStatus {
-				t.Errorf("expected status %d, got %d", tt.wantStatus, resp.StatusCode)
+			rec := httptest.NewRecorder()
+			writeErrorFromDomain(rec, tt.err, "fallback")
+			if rec.Code != tt.wantStatus {
+				t.Errorf("expected status %d, got %d", tt.wantStatus, rec.Code)
 			}
 		})
 	}
 }
 
-func TestHandleHTTPRequest_NotFound(t *testing.T) {
+func TestRouter_NotFound(t *testing.T) {
 	a := &App{
 		Config: &config.Config{},
 		Logger: discardLogger(),
 	}
 
-	req := Request{Type: RequestTypeHTTP, Method: "GET", Path: "/nonexistent"}
-	resp := a.HandleRequest(context.Background(), req)
-	if resp.StatusCode != 404 {
-		t.Errorf("expected 404, got %d", resp.StatusCode)
+	router := a.Handler()
+	req := httptest.NewRequest(http.MethodGet, "/nonexistent", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
 	}
 }
 
-func TestHandleHTTPRequest_MethodNotAllowed(t *testing.T) {
+func TestRouter_MethodNotAllowed(t *testing.T) {
 	a := &App{
 		Config: &config.Config{},
 		Logger: discardLogger(),
 	}
 
-	req := Request{Type: RequestTypeHTTP, Method: "DELETE", Path: "/webhooks"}
-	resp := a.HandleRequest(context.Background(), req)
-	if resp.StatusCode != 405 {
-		t.Errorf("expected 405, got %d", resp.StatusCode)
+	router := a.Handler()
+	req := httptest.NewRequest(http.MethodDelete, "/webhooks", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("expected 405, got %d", rec.Code)
 	}
 }
 
-func TestHandleHTTPRequest_BasePathStripping(t *testing.T) {
+func TestRouter_BasePathStripping(t *testing.T) {
 	a := &App{
 		Config: &config.Config{BasePath: "/api/v1"},
 		Logger: discardLogger(),
 	}
 
-	req := Request{Type: RequestTypeHTTP, Method: "GET", Path: "/api/v1/server/status"}
-	resp := a.HandleRequest(context.Background(), req)
-	if resp.StatusCode != 200 {
-		t.Errorf("expected 200 for base-path-stripped status, got %d", resp.StatusCode)
+	router := a.Handler()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/server/status", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200 for base-path-stripped status, got %d (body: %s)",
+			rec.Code, rec.Body.String())
 	}
 }
 

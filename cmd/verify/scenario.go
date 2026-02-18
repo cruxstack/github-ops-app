@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"time"
 
@@ -197,40 +199,51 @@ func runScenario(ctx context.Context, scenario TestScenario, verbose bool, logge
 		fmt.Printf("\n  Application Output:\n")
 	}
 
-	var req app.Request
+	router := a.Handler()
+
+	var httpReq *http.Request
 	switch scenario.EventType {
 	case "scheduled_event":
 		var evt app.ScheduledEvent
 		if err := json.Unmarshal(scenario.EventPayload, &evt); err != nil {
 			return errors.Wrap(err, "failed to unmarshal event payload")
 		}
-		req = app.Request{
-			Type:            app.RequestTypeScheduled,
-			ScheduledAction: evt.Action,
-			ScheduledData:   evt.Data,
+		path := fmt.Sprintf("%s/scheduled/%s", cfg.BasePath, evt.Action)
+		var body []byte
+		if evt.Data != nil {
+			body = evt.Data
+		}
+		var err error
+		httpReq, err = http.NewRequestWithContext(ctx, http.MethodPost, path, bytes.NewReader(body))
+		if err != nil {
+			return errors.Wrap(err, "failed to construct scheduled http request")
+		}
+		if cfg.AdminToken != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+cfg.AdminToken)
+		}
+		if len(body) > 0 {
+			httpReq.Header.Set("Content-Type", "application/json")
 		}
 
 	case "webhook":
-		req = app.Request{
-			Type:   app.RequestTypeHTTP,
-			Method: "POST",
-			Path:   "/webhooks",
-			Headers: map[string]string{
-				"x-github-event":      scenario.WebhookType,
-				"x-hub-signature-256": "", // signature validated separately in tests
-			},
-			Body: scenario.WebhookPayload,
+		var err error
+		httpReq, err = http.NewRequestWithContext(ctx, http.MethodPost, cfg.BasePath+"/webhooks", bytes.NewReader(scenario.WebhookPayload))
+		if err != nil {
+			return errors.Wrap(err, "failed to construct webhook http request")
 		}
+		httpReq.Header.Set("X-GitHub-Event", scenario.WebhookType)
+		httpReq.Header.Set("X-Hub-Signature-256", "") // signature validated separately in tests
 
 	default:
 		return errors.Newf("unknown event type: %s", scenario.EventType)
 	}
 
-	resp := a.HandleRequest(ctx, req)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, httpReq)
 
 	var processErr error
-	if resp.StatusCode >= 400 {
-		processErr = errors.Newf("request failed with status %d: %s", resp.StatusCode, string(resp.Body))
+	if rec.Code >= 400 {
+		processErr = errors.Newf("request failed with status %d: %s", rec.Code, rec.Body.String())
 	}
 
 	if scenario.ExpectError {

@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"testing"
 
@@ -135,7 +137,7 @@ func TestProcessScheduledEvent_SlackTest(t *testing.T) {
 	}
 
 	evt := ScheduledEvent{Action: "slack-test"}
-	err := app.ProcessScheduledEvent(context.Background(), evt)
+	err := app.processScheduledEvent(context.Background(), evt)
 
 	// should fail because slack is not configured
 	if err == nil {
@@ -150,7 +152,7 @@ func TestProcessScheduledEvent_UnknownAction(t *testing.T) {
 	}
 
 	evt := ScheduledEvent{Action: "unknown-action"}
-	err := app.ProcessScheduledEvent(context.Background(), evt)
+	err := app.processScheduledEvent(context.Background(), evt)
 
 	if err == nil {
 		t.Error("expected error for unknown action")
@@ -164,7 +166,7 @@ func TestFakeDataTypes(t *testing.T) {
 	var _ *domain.OrphanedUsersReport = fakeOrphanedUsersReport()
 }
 
-func TestCheckAdminAuth(t *testing.T) {
+func TestAdminAuthMiddleware(t *testing.T) {
 	tests := []struct {
 		name        string
 		adminToken  string
@@ -211,33 +213,33 @@ func TestCheckAdminAuth(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			app := &App{
+			a := &App{
 				Config: &config.Config{AdminToken: tt.adminToken},
 				Logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
 			}
 
-			headers := map[string]string{}
+			// test via /server/status which uses admin auth middleware
+			router := a.Handler()
+
+			req := httptest.NewRequest(http.MethodGet, "/server/status", nil)
 			if tt.authHeader != "" {
-				headers["authorization"] = tt.authHeader
+				req.Header.Set("Authorization", tt.authHeader)
 			}
 
-			req := Request{Headers: headers}
-			resp := app.checkAdminAuth(req)
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
 
-			if tt.expectError && resp == nil {
-				t.Error("expected error response, got nil")
+			if tt.expectError && rec.Code != http.StatusUnauthorized {
+				t.Errorf("expected 401, got %d", rec.Code)
 			}
-			if !tt.expectError && resp != nil {
-				t.Errorf("expected no error, got status %d", resp.StatusCode)
-			}
-			if tt.expectError && resp != nil && resp.StatusCode != 401 {
-				t.Errorf("expected status 401, got %d", resp.StatusCode)
+			if !tt.expectError && rec.Code == http.StatusUnauthorized {
+				t.Errorf("expected success, got 401")
 			}
 		})
 	}
 }
 
-func TestHandleRequest_AdminAuthOnProtectedEndpoints(t *testing.T) {
+func TestRouter_AdminAuthOnProtectedEndpoints(t *testing.T) {
 	tests := []struct {
 		name           string
 		path           string
@@ -249,7 +251,7 @@ func TestHandleRequest_AdminAuthOnProtectedEndpoints(t *testing.T) {
 		{
 			name:           "status endpoint, no token configured",
 			path:           "/server/status",
-			method:         "GET",
+			method:         http.MethodGet,
 			adminToken:     "",
 			authHeader:     "",
 			expectedStatus: 200,
@@ -257,7 +259,7 @@ func TestHandleRequest_AdminAuthOnProtectedEndpoints(t *testing.T) {
 		{
 			name:           "status endpoint, token required, missing",
 			path:           "/server/status",
-			method:         "GET",
+			method:         http.MethodGet,
 			adminToken:     "secret",
 			authHeader:     "",
 			expectedStatus: 401,
@@ -265,7 +267,7 @@ func TestHandleRequest_AdminAuthOnProtectedEndpoints(t *testing.T) {
 		{
 			name:           "status endpoint, token required, correct",
 			path:           "/server/status",
-			method:         "GET",
+			method:         http.MethodGet,
 			adminToken:     "secret",
 			authHeader:     "Bearer secret",
 			expectedStatus: 200,
@@ -273,7 +275,7 @@ func TestHandleRequest_AdminAuthOnProtectedEndpoints(t *testing.T) {
 		{
 			name:           "config endpoint, token required, missing",
 			path:           "/server/config",
-			method:         "GET",
+			method:         http.MethodGet,
 			adminToken:     "secret",
 			authHeader:     "",
 			expectedStatus: 401,
@@ -281,7 +283,7 @@ func TestHandleRequest_AdminAuthOnProtectedEndpoints(t *testing.T) {
 		{
 			name:           "config endpoint, token required, correct",
 			path:           "/server/config",
-			method:         "GET",
+			method:         http.MethodGet,
 			adminToken:     "secret",
 			authHeader:     "Bearer secret",
 			expectedStatus: 200,
@@ -289,7 +291,7 @@ func TestHandleRequest_AdminAuthOnProtectedEndpoints(t *testing.T) {
 		{
 			name:           "scheduled endpoint, token required, missing",
 			path:           "/scheduled/slack-test",
-			method:         "POST",
+			method:         http.MethodPost,
 			adminToken:     "secret",
 			authHeader:     "",
 			expectedStatus: 401,
@@ -298,27 +300,24 @@ func TestHandleRequest_AdminAuthOnProtectedEndpoints(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			app := &App{
+			a := &App{
 				Config: &config.Config{AdminToken: tt.adminToken},
 				Logger: slog.New(slog.NewTextHandler(os.Stderr, nil)),
 			}
 
-			headers := map[string]string{}
+			router := a.Handler()
+
+			req := httptest.NewRequest(tt.method, tt.path, nil)
 			if tt.authHeader != "" {
-				headers["authorization"] = tt.authHeader
+				req.Header.Set("Authorization", tt.authHeader)
 			}
 
-			req := Request{
-				Type:    RequestTypeHTTP,
-				Method:  tt.method,
-				Path:    tt.path,
-				Headers: headers,
-			}
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
 
-			resp := app.HandleRequest(context.Background(), req)
-
-			if resp.StatusCode != tt.expectedStatus {
-				t.Errorf("expected status %d, got %d", tt.expectedStatus, resp.StatusCode)
+			if rec.Code != tt.expectedStatus {
+				t.Errorf("expected status %d, got %d (body: %s)",
+					tt.expectedStatus, rec.Code, rec.Body.String())
 			}
 		})
 	}

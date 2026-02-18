@@ -6,6 +6,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"sync"
 
 	"github.com/cockroachdb/errors"
 	"github.com/cruxstack/github-ops-app/internal/config"
@@ -20,6 +22,8 @@ type App struct {
 	GitHubClient domain.GitHubClient
 	OktaClient   domain.OktaClient
 	Notifier     domain.Notifier
+	router       http.Handler
+	routerOnce   sync.Once
 }
 
 // ScheduledEvent represents a generic scheduled event.
@@ -28,9 +32,9 @@ type ScheduledEvent struct {
 	Data   json.RawMessage `json:"data,omitempty"`
 }
 
-// ProcessScheduledEvent handles scheduled events (e.g., cron jobs).
-// Routes to appropriate handlers based on event action.
-func (a *App) ProcessScheduledEvent(ctx context.Context, evt ScheduledEvent) error {
+// processScheduledEvent handles scheduled events (e.g., cron jobs).
+// routes to appropriate handlers based on event action.
+func (a *App) processScheduledEvent(ctx context.Context, evt ScheduledEvent) error {
 	if a.Config.DebugEnabled {
 		j, _ := json.Marshal(evt)
 		a.Logger.Debug("received scheduled event", slog.String("event", string(j)))
@@ -46,9 +50,9 @@ func (a *App) ProcessScheduledEvent(ctx context.Context, evt ScheduledEvent) err
 	}
 }
 
-// ProcessWebhook handles incoming GitHub webhook events.
-// Supports pull_request, team, and membership events.
-func (a *App) ProcessWebhook(ctx context.Context, payload []byte, eventType string) error {
+// processWebhook handles incoming GitHub webhook events.
+// supports pull_request, team, and membership events.
+func (a *App) processWebhook(ctx context.Context, payload []byte, eventType string) error {
 	if a.Config.DebugEnabled {
 		a.Logger.Debug("received webhook", slog.String("event_type", eventType))
 	}
