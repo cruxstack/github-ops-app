@@ -1,5 +1,5 @@
-// Package webhooks provides GitHub webhook event parsing and signature
-// validation. Supports pull_request, team, and membership event types.
+// Package webhooks validates GitHub webhook signatures and parses the
+// pull_request, team, and membership events the application handles.
 package webhooks
 
 import (
@@ -7,250 +7,245 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 
-	"github.com/cockroachdb/errors"
+	"github.com/google/go-github/v93/github"
+
 	"github.com/cruxstack/github-ops-app/internal/domain"
-	"github.com/google/go-github/v79/github"
 )
+
+// Event types the application handles.
+const (
+	EventPing        = "ping"
+	EventPullRequest = "pull_request"
+	EventTeam        = "team"
+	EventMembership  = "membership"
+)
+
+// ValidateSignature verifies the X-Hub-Signature-256 HMAC of a payload. An
+// empty secret is rejected, so a missing configuration never accepts
+// unsigned requests.
+func ValidateSignature(payload []byte, signature, secret string) error {
+	if secret == "" {
+		return fmt.Errorf("webhook secret is not configured: %w", domain.ErrConfig)
+	}
+	if signature == "" {
+		return domain.ErrMissingSignature
+	}
+
+	got, ok := strings.CutPrefix(signature, "sha256=")
+	if !ok {
+		return fmt.Errorf("signature must start with 'sha256=': %w", domain.ErrInvalidSignature)
+	}
+	gotMAC, err := hex.DecodeString(got)
+	if err != nil {
+		return fmt.Errorf("signature is not hex: %w", domain.ErrInvalidSignature)
+	}
+
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	if !hmac.Equal(gotMAC, mac.Sum(nil)) {
+		return domain.ErrInvalidSignature
+	}
+	return nil
+}
+
+// Sign returns the X-Hub-Signature-256 header value for a payload.
+func Sign(payload []byte, secret string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(payload)
+	return "sha256=" + hex.EncodeToString(mac.Sum(nil))
+}
+
+// sender is the part of an event that identifies who triggered it.
+type sender struct {
+	Sender *github.User `json:"sender"`
+}
+
+// GetSenderLogin returns the login of the user who triggered the event.
+func (e sender) GetSenderLogin() string {
+	return e.Sender.GetLogin()
+}
+
+// GetSenderType returns the type of the sender, such as User or Bot.
+func (e sender) GetSenderType() string {
+	return e.Sender.GetType()
+}
 
 // PullRequestEvent represents a GitHub pull_request webhook payload.
 type PullRequestEvent struct {
-	Action       string               `json:"action"`
-	Number       int                  `json:"number"`
-	PullRequest  *github.PullRequest  `json:"pull_request"`
-	Repository   *github.Repository   `json:"repository"`
-	Sender       *github.User         `json:"sender"`
-	Installation *github.Installation `json:"installation"`
+	sender
+	Action      string              `json:"action"`
+	Number      int                 `json:"number"`
+	PullRequest *github.PullRequest `json:"pull_request"`
+	Repository  *github.Repository  `json:"repository"`
 }
 
 // TeamEvent represents a GitHub team webhook payload.
 type TeamEvent struct {
+	sender
 	Action       string               `json:"action"`
 	Team         *github.Team         `json:"team"`
 	Changes      *TeamChanges         `json:"changes,omitempty"`
-	Repository   *github.Repository   `json:"repository,omitempty"`
 	Organization *github.Organization `json:"organization"`
-	Sender       *github.User         `json:"sender"`
-	Installation *github.Installation `json:"installation"`
 }
 
-// TeamChanges contains details about what changed in a team event.
+// TeamChanges holds the previous values of an edited team's fields.
 type TeamChanges struct {
-	Name        *TeamChangeDetail `json:"name,omitempty"`
-	Description *TeamChangeDetail `json:"description,omitempty"`
-	Privacy     *TeamChangeDetail `json:"privacy,omitempty"`
-	Repository  *TeamChangeDetail `json:"repository,omitempty"`
-}
-
-// TeamChangeDetail contains the previous value before a change.
-type TeamChangeDetail struct {
-	From string `json:"from"`
+	Name *struct {
+		From string `json:"from"`
+	} `json:"name,omitempty"`
 }
 
 // MembershipEvent represents a GitHub membership webhook payload.
 type MembershipEvent struct {
+	sender
 	Action       string               `json:"action"`
 	Scope        string               `json:"scope"`
 	Member       *github.User         `json:"member"`
 	Team         *github.Team         `json:"team"`
 	Organization *github.Organization `json:"organization"`
-	Sender       *github.User         `json:"sender"`
-	Installation *github.Installation `json:"installation"`
 }
 
-// ValidateWebhookSignature verifies HMAC-SHA256 webhook signature.
-// returns error if signature is invalid or missing when required.
-func ValidateWebhookSignature(payload []byte, signature string, secret string) error {
-	if secret == "" {
-		if signature != "" {
-			return domain.ErrUnexpectedSignature
-		}
-		return nil
+func parse(payload []byte, event any, kind string) error {
+	if err := json.Unmarshal(payload, event); err != nil {
+		return fmt.Errorf("failed to unmarshal %s event: %w", kind, errors.Join(domain.ErrInvalidPayload, err))
 	}
-
-	if signature == "" {
-		return domain.ErrMissingSignature
-	}
-
-	if !strings.HasPrefix(signature, "sha256=") {
-		return errors.Wrap(domain.ErrInvalidSignature, "must start with 'sha256='")
-	}
-
-	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write(payload)
-	expectedMAC := hex.EncodeToString(mac.Sum(nil))
-	expectedSignature := "sha256=" + expectedMAC
-
-	if !hmac.Equal([]byte(signature), []byte(expectedSignature)) {
-		return errors.Wrap(domain.ErrInvalidSignature, "computed signature does not match")
-	}
-
 	return nil
 }
 
+func missing(kind, field string) error {
+	return fmt.Errorf("%s event is missing %s: %w", kind, field, domain.ErrInvalidPayload)
+}
+
 // ParsePullRequestEvent unmarshals and validates a pull_request webhook.
-// returns error if required fields are missing.
 func ParsePullRequestEvent(payload []byte) (*PullRequestEvent, error) {
 	var event PullRequestEvent
-	if err := json.Unmarshal(payload, &event); err != nil {
-		return nil, errors.Wrap(err, "failed to unmarshal pull request event")
+	if err := parse(payload, &event, EventPullRequest); err != nil {
+		return nil, err
 	}
-	if event.PullRequest == nil {
-		return nil, errors.Wrap(domain.ErrMissingPRData, "missing pull_request field")
-	}
-	if event.PullRequest.Number == nil {
-		return nil, errors.Wrap(domain.ErrMissingPRData, "missing pr number")
-	}
-	if event.PullRequest.Base == nil || event.PullRequest.Base.Ref == nil {
-		return nil, errors.Wrap(domain.ErrMissingPRData, "missing base branch")
-	}
-	if event.Repository == nil {
-		return nil, errors.Wrap(domain.ErrMissingPRData, "missing repository")
+	switch {
+	case event.PullRequest == nil:
+		return nil, missing(EventPullRequest, "pull_request")
+	case event.PullRequest.Number == nil:
+		return nil, missing(EventPullRequest, "pull_request.number")
+	case event.PullRequest.GetBase().GetRef() == "":
+		return nil, missing(EventPullRequest, "pull_request.base.ref")
+	case event.Repository.GetName() == "" || event.Repository.GetOwner().GetLogin() == "":
+		return nil, missing(EventPullRequest, "repository")
 	}
 	return &event, nil
 }
 
 // IsMerged returns true if the PR was closed via merge.
 func (e *PullRequestEvent) IsMerged() bool {
-	return e.Action == "closed" && e.PullRequest != nil && e.PullRequest.Merged != nil && *e.PullRequest.Merged
+	return e.Action == "closed" && e.PullRequest.GetMerged()
+}
+
+// GetNumber returns the PR number.
+func (e *PullRequestEvent) GetNumber() int {
+	return e.PullRequest.GetNumber()
 }
 
 // GetBaseBranch returns the target branch name.
 func (e *PullRequestEvent) GetBaseBranch() string {
-	if e.PullRequest != nil && e.PullRequest.Base != nil && e.PullRequest.Base.Ref != nil {
-		return *e.PullRequest.Base.Ref
-	}
-	return ""
+	return e.PullRequest.GetBase().GetRef()
 }
 
 // GetRepoFullName returns the repository in owner/name format.
 func (e *PullRequestEvent) GetRepoFullName() string {
-	if e.Repository != nil && e.Repository.FullName != nil {
-		return *e.Repository.FullName
-	}
-	return ""
+	return e.Repository.GetFullName()
 }
 
 // GetRepoOwner returns the repository owner login.
 func (e *PullRequestEvent) GetRepoOwner() string {
-	if e.Repository != nil && e.Repository.Owner != nil && e.Repository.Owner.Login != nil {
-		return *e.Repository.Owner.Login
-	}
-	return ""
+	return e.Repository.GetOwner().GetLogin()
 }
 
 // GetRepoName returns the repository name without owner.
 func (e *PullRequestEvent) GetRepoName() string {
-	if e.Repository != nil && e.Repository.Name != nil {
-		return *e.Repository.Name
-	}
-	return ""
-}
-
-// GetInstallationID returns the GitHub App installation ID.
-func (e *PullRequestEvent) GetInstallationID() int64 {
-	if e.Installation != nil && e.Installation.ID != nil {
-		return *e.Installation.ID
-	}
-	return 0
+	return e.Repository.GetName()
 }
 
 // ParseTeamEvent unmarshals and validates a team webhook.
 func ParseTeamEvent(payload []byte) (*TeamEvent, error) {
 	var event TeamEvent
-	if err := json.Unmarshal(payload, &event); err != nil {
-		return nil, errors.Wrap(err, "failed to unmarshal team event")
+	if err := parse(payload, &event, EventTeam); err != nil {
+		return nil, err
 	}
-	if event.Team == nil {
-		return nil, errors.New("missing team field in event")
-	}
-	if event.Sender == nil {
-		return nil, errors.New("missing sender field in event")
+	switch {
+	case event.Team == nil:
+		return nil, missing(EventTeam, "team")
+	case event.Sender == nil:
+		return nil, missing(EventTeam, "sender")
+	case event.Organization.GetLogin() == "":
+		return nil, missing(EventTeam, "organization")
 	}
 	return &event, nil
+}
+
+// GetTeamSlug returns the team's slug.
+func (e *TeamEvent) GetTeamSlug() string {
+	return e.Team.GetSlug()
+}
+
+// GetOrgLogin returns the login of the organization the team belongs to.
+func (e *TeamEvent) GetOrgLogin() string {
+	return e.Organization.GetLogin()
+}
+
+// AffectsMembership returns true if the change can affect which team the
+// sync maps a group to: a team was created, deleted, or renamed. Changes to
+// a team's description, privacy, or repository access cannot.
+func (e *TeamEvent) AffectsMembership() bool {
+	switch e.Action {
+	case "created", "deleted":
+		return true
+	case "edited":
+		return e.Changes != nil && e.Changes.Name != nil
+	default:
+		return false
+	}
+}
+
+// GetPreviousTeamSlug returns the slug the team had before it was renamed,
+// or "".
+func (e *TeamEvent) GetPreviousTeamSlug() string {
+	if e.Changes == nil || e.Changes.Name == nil {
+		return ""
+	}
+	return domain.TeamSlug(e.Changes.Name.From)
 }
 
 // ParseMembershipEvent unmarshals and validates a membership webhook.
 func ParseMembershipEvent(payload []byte) (*MembershipEvent, error) {
 	var event MembershipEvent
-	if err := json.Unmarshal(payload, &event); err != nil {
-		return nil, errors.Wrap(err, "failed to unmarshal membership event")
+	if err := parse(payload, &event, EventMembership); err != nil {
+		return nil, err
 	}
-	if event.Team == nil {
-		return nil, errors.New("missing team field in event")
-	}
-	if event.Member == nil {
-		return nil, errors.New("missing member field in event")
-	}
-	if event.Sender == nil {
-		return nil, errors.New("missing sender field in event")
+	switch {
+	case event.Team == nil:
+		return nil, missing(EventMembership, "team")
+	case event.Member == nil:
+		return nil, missing(EventMembership, "member")
+	case event.Sender == nil:
+		return nil, missing(EventMembership, "sender")
+	case event.Organization.GetLogin() == "":
+		return nil, missing(EventMembership, "organization")
 	}
 	return &event, nil
 }
 
-// GetInstallationID returns the GitHub App installation ID.
-func (e *TeamEvent) GetInstallationID() int64 {
-	if e.Installation != nil && e.Installation.ID != nil {
-		return *e.Installation.ID
-	}
-	return 0
-}
-
-// GetTeamSlug returns the team's URL-friendly identifier.
-func (e *TeamEvent) GetTeamSlug() string {
-	if e.Team != nil && e.Team.Slug != nil {
-		return *e.Team.Slug
-	}
-	return ""
-}
-
-// GetSenderLogin returns the username of the user who triggered the event.
-func (e *TeamEvent) GetSenderLogin() string {
-	if e.Sender != nil && e.Sender.Login != nil {
-		return *e.Sender.Login
-	}
-	return ""
-}
-
-// GetSenderType returns the sender's type (User or Bot).
-func (e *TeamEvent) GetSenderType() string {
-	if e.Sender != nil && e.Sender.Type != nil {
-		return *e.Sender.Type
-	}
-	return ""
-}
-
-// GetInstallationID returns the GitHub App installation ID.
-func (e *MembershipEvent) GetInstallationID() int64 {
-	if e.Installation != nil && e.Installation.ID != nil {
-		return *e.Installation.ID
-	}
-	return 0
-}
-
-// GetTeamSlug returns the team's URL-friendly identifier.
+// GetTeamSlug returns the team's slug.
 func (e *MembershipEvent) GetTeamSlug() string {
-	if e.Team != nil && e.Team.Slug != nil {
-		return *e.Team.Slug
-	}
-	return ""
+	return e.Team.GetSlug()
 }
 
-// GetSenderLogin returns the username of the user who triggered the event.
-func (e *MembershipEvent) GetSenderLogin() string {
-	if e.Sender != nil && e.Sender.Login != nil {
-		return *e.Sender.Login
-	}
-	return ""
-}
-
-// GetSenderType returns the sender's type (User or Bot).
-func (e *MembershipEvent) GetSenderType() string {
-	if e.Sender != nil && e.Sender.Type != nil {
-		return *e.Sender.Type
-	}
-	return ""
+// GetOrgLogin returns the login of the organization the team belongs to.
+func (e *MembershipEvent) GetOrgLogin() string {
+	return e.Organization.GetLogin()
 }
 
 // IsTeamScope returns true if the membership event is for a team.

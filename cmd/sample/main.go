@@ -1,115 +1,84 @@
-// Package main provides a sample test runner for live API testing.
-// WARNING: DO NOT RUN - requires live credentials and makes real API calls
-// to GitHub, Okta, and Slack. Use cmd/verify for offline testing instead.
+// Command sample sends the samples in fixtures/samples.json through the
+// application with the configuration in .env.
+//
+// WARNING: it uses live credentials and calls the real GitHub, Okta, and
+// Slack APIs, which can change team membership. Use the e2e tests for
+// offline testing instead.
 package main
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
 
 	"github.com/joho/godotenv"
 
 	"github.com/cruxstack/github-ops-app/internal/app"
 	"github.com/cruxstack/github-ops-app/internal/config"
+	"github.com/cruxstack/github-ops-app/internal/github/webhooks"
 )
 
+type sample struct {
+	EventType   string          `json:"event_type"`
+	Description string          `json:"description"`
+	Payload     json.RawMessage `json:"payload,omitempty"`
+}
+
 func main() {
-	logger := config.NewLogger()
-	ctx := context.Background()
-
-	envpath := filepath.Join(".env")
-	logger.Debug("loading environment", slog.String("path", envpath))
-	if _, err := os.Stat(envpath); err == nil {
-		_ = godotenv.Load(envpath)
-	}
-
-	cfg, err := config.NewConfig()
-	if err != nil {
-		logger.Error("failed to load config", slog.String("error", err.Error()))
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	if err := run(context.Background(), logger); err != nil {
+		logger.Error("sample run failed", "error", err.Error())
 		os.Exit(1)
 	}
+}
 
-	a, err := app.NewApp(ctx, cfg, logger)
+func run(ctx context.Context, logger *slog.Logger) error {
+	if err := godotenv.Load(".env"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("failed to read .env: %w", err)
+	}
+	cfg, err := config.Load(ctx, config.ProcessEnv())
 	if err != nil {
-		logger.Error("failed to initialize app", slog.String("error", err.Error()))
-		os.Exit(1)
+		return err
+	}
+	a, err := app.New(cfg, logger)
+	if err != nil {
+		return err
 	}
 
-	router := a.Handler()
-
-	path := filepath.Join("fixtures", "samples.json")
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile("fixtures/samples.json")
 	if err != nil {
-		logger.Error("failed to read samples file", slog.String("error", err.Error()))
-		os.Exit(1)
+		return err
 	}
-
-	var samples []map[string]any
+	var samples []sample
 	if err := json.Unmarshal(raw, &samples); err != nil {
-		logger.Error("failed to parse samples json", slog.String("error", err.Error()))
-		os.Exit(1)
+		return fmt.Errorf("failed to parse samples: %w", err)
 	}
 
-	for i, sample := range samples {
-		eventType, ok := sample["event_type"].(string)
-		if !ok {
-			logger.Error("missing or invalid event_type", slog.Int("sample", i))
-			os.Exit(1)
-		}
-
-		switch eventType {
+	for i, s := range samples {
+		logger.Info("running sample", "sample", i, "type", s.EventType, "description", s.Description)
+		switch s.EventType {
 		case "okta_sync":
-			reqPath := fmt.Sprintf("%s/scheduled/okta-sync", cfg.BasePath)
-			httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, reqPath, nil)
-			if err != nil {
-				logger.Error("failed to construct http request",
-					slog.Int("sample", i),
-					slog.String("error", err.Error()))
-				os.Exit(1)
+			if err := a.RunScheduled(ctx, app.ActionOktaSync); err != nil {
+				return fmt.Errorf("sample %d: %w", i, err)
 			}
-			if cfg.AdminToken != "" {
-				httpReq.Header.Set("Authorization", "Bearer "+cfg.AdminToken)
-			}
-			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, httpReq)
-			if rec.Code >= 400 {
-				logger.Error("failed to process okta_sync sample",
-					slog.Int("sample", i),
-					slog.String("response", rec.Body.String()))
-				os.Exit(1)
-			}
-
 		case "pr_webhook":
-			payload, _ := json.Marshal(sample["payload"])
-			reqPath := fmt.Sprintf("%s/webhooks", cfg.BasePath)
-			httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, reqPath, bytes.NewReader(payload))
-			if err != nil {
-				logger.Error("failed to construct http request",
-					slog.Int("sample", i),
-					slog.String("error", err.Error()))
-				os.Exit(1)
-			}
-			httpReq.Header.Set("X-GitHub-Event", "pull_request")
+			req := httptest.NewRequestWithContext(ctx, http.MethodPost, cfg.Server.BasePath+"/webhooks", bytes.NewReader(s.Payload))
+			req.Header.Set("X-GitHub-Event", webhooks.EventPullRequest)
+			req.Header.Set("X-Hub-Signature-256", webhooks.Sign(s.Payload, cfg.GitHub.WebhookSecret))
 			rec := httptest.NewRecorder()
-			router.ServeHTTP(rec, httpReq)
-			if rec.Code >= 400 {
-				logger.Error("failed to process pr_webhook sample",
-					slog.Int("sample", i),
-					slog.String("response", rec.Body.String()))
-				os.Exit(1)
+			a.Handler().ServeHTTP(rec, req)
+			if rec.Code >= http.StatusBadRequest {
+				return fmt.Errorf("sample %d: status %d: %s", i, rec.Code, rec.Body)
 			}
-
 		default:
-			logger.Info("skipping unknown event type", slog.String("event_type", eventType))
+			logger.Warn("skipping unknown sample type", "type", s.EventType)
 		}
-
-		logger.Info("processed sample successfully", slog.Int("sample", i))
 	}
+	return nil
 }

@@ -1,314 +1,161 @@
-// Package okta provides Okta API client for group and user management.
-// Uses OAuth 2.0 with private key authentication.
+// Package okta is the Okta API client. It authenticates with OAuth 2.0
+// private key JWTs and reads groups and their members' GitHub usernames.
 package okta
 
 import (
-	"context"
 	"crypto/rsa"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
+	"time"
 
-	"github.com/cockroachdb/errors"
+	"github.com/okta/okta-sdk-golang/v8/okta"
+
 	"github.com/cruxstack/github-ops-app/internal/domain"
-	"github.com/okta/okta-sdk-golang/v6/okta"
 )
 
-// DefaultScopes defines the required OAuth scopes for the Okta API.
-// these scopes are necessary for group sync functionality.
+// DefaultScopes are the OAuth scopes group sync needs.
 var DefaultScopes = []string{"okta.groups.read", "okta.users.read"}
 
-// certPoolKey is a typed context key for TLS certificate pool injection.
-type certPoolKey struct{}
+// requestTimeout bounds every Okta API request, in seconds.
+const requestTimeout = 30
 
-// WithCertPool returns a new context with the given TLS certificate pool.
-// used by integration tests to inject self-signed certs.
-func WithCertPool(ctx context.Context, pool *x509.CertPool) context.Context {
-	return context.WithValue(ctx, certPoolKey{}, pool)
+// Rate-limited requests are retried after the reset time Okta returns, up to
+// this many times and this many seconds apart.
+const (
+	rateLimitMaxRetries = 3
+	rateLimitMaxBackoff = 30
+)
+
+// Options configures a Client.
+type Options struct {
+	// Domain is the Okta org's host, such as example.okta.com.
+	Domain   string
+	ClientID string
+	// PrivateKey is the PEM-encoded RSA key registered with the OAuth app.
+	PrivateKey   []byte
+	PrivateKeyID string
+	Scopes       []string
+	// GitHubUserField is the user profile attribute holding the GitHub
+	// username.
+	GitHubUserField string
+	// BaseURL overrides https://<Domain>, for tests.
+	BaseURL string
+	// HTTPClient is the client requests are sent with, for tests.
+	HTTPClient *http.Client
 }
 
-// convertToPKCS1 converts a PEM-encoded private key to PKCS#1 format if needed.
-// the Okta SDK requires PKCS#1 format (BEGIN RSA PRIVATE KEY), but Okta's
-// console generates PKCS#8 keys (BEGIN PRIVATE KEY). this function detects the
-// format and converts PKCS#8 to PKCS#1 automatically.
-func convertToPKCS1(keyPEM []byte) ([]byte, error) {
-	block, _ := pem.Decode(keyPEM)
-	if block == nil {
-		return nil, errors.New("failed to decode pem block from private key")
-	}
-
-	// already in PKCS#1 format
-	if block.Type == "RSA PRIVATE KEY" {
-		return keyPEM, nil
-	}
-
-	// convert PKCS#8 to PKCS#1
-	if block.Type == "PRIVATE KEY" {
-		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
-		if err != nil {
-			return nil, errors.Wrap(err, "failed to parse pkcs#8 private key")
-		}
-
-		rsaKey, ok := key.(*rsa.PrivateKey)
-		if !ok {
-			return nil, errors.New("private key is not an rsa key")
-		}
-
-		pkcs1Bytes := x509.MarshalPKCS1PrivateKey(rsaKey)
-		pkcs1PEM := pem.EncodeToMemory(&pem.Block{
-			Type:  "RSA PRIVATE KEY",
-			Bytes: pkcs1Bytes,
-		})
-
-		return pkcs1PEM, nil
-	}
-
-	return nil, errors.Newf("unsupported private key type: %s", block.Type)
-}
-
-// Client wraps the Okta SDK client with custom configuration.
-// implements domain.OktaClient.
+// Client reads Okta groups and members. Implements domain.OktaClient.
 type Client struct {
-	apiClient       *okta.APIClient
+	api             *okta.APIClient
 	githubUserField string
-	logger          *slog.Logger
 }
 
-// compile-time assertion
 var _ domain.OktaClient = (*Client)(nil)
 
-// ClientConfig contains Okta client configuration.
-type ClientConfig struct {
-	Domain          string
-	ClientID        string
-	PrivateKey      []byte
-	PrivateKeyID    string
-	Scopes          []string
-	GitHubUserField string
-	BaseURL         string
-	Logger          *slog.Logger
-}
-
-// NewClient creates an Okta client with background context.
-func NewClient(cfg *ClientConfig) (*Client, error) {
-	return NewClientWithContext(context.Background(), cfg)
-}
-
-// NewClientWithContext creates an Okta client with OAuth 2.0 private key
-// authentication. supports custom TLS certificate pools via context for
-// testing.
-func NewClientWithContext(ctx context.Context, cfg *ClientConfig) (*Client, error) {
-	if cfg.ClientID == "" || len(cfg.PrivateKey) == 0 {
-		return nil, domain.ErrMissingOAuthCreds
+// New creates a Client. It makes no API calls.
+func New(opts Options) (*Client, error) {
+	if opts.ClientID == "" {
+		return nil, errors.New("okta client id is required")
 	}
-
-	orgURL := cfg.BaseURL
-	if orgURL == "" {
-		orgURL = fmt.Sprintf("https://%s", cfg.Domain)
+	if opts.GitHubUserField == "" {
+		return nil, errors.New("okta github user field is required")
 	}
-
-	privateKey, err := convertToPKCS1(cfg.PrivateKey)
+	privateKey, err := toPKCS1(opts.PrivateKey)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to convert private key")
+		return nil, err
 	}
 
-	scopes := cfg.Scopes
+	orgURL := opts.BaseURL
+	if orgURL == "" {
+		orgURL = "https://" + opts.Domain
+	}
+	scopes := opts.Scopes
 	if len(scopes) == 0 {
 		scopes = DefaultScopes
 	}
 
-	// v6 uses NewConfiguration which returns (config, error)
-	opts := []okta.ConfigSetter{
+	// set every option that matters explicitly, so OKTA_CLIENT_* variables
+	// and okta.yaml files can't change how the client behaves
+	setters := []okta.ConfigSetter{
 		okta.WithOrgUrl(orgURL),
 		okta.WithAuthorizationMode("PrivateKey"),
-		okta.WithClientId(cfg.ClientID),
+		okta.WithClientId(opts.ClientID),
 		okta.WithPrivateKey(string(privateKey)),
+		okta.WithPrivateKeyId(opts.PrivateKeyID),
 		okta.WithScopes(scopes),
+		okta.WithToken(""),
+		okta.WithCache(false),
+		okta.WithRequestTimeout(requestTimeout),
+		okta.WithRateLimitMaxRetries(rateLimitMaxRetries),
+		okta.WithRateLimitMaxBackOff(rateLimitMaxBackoff),
+	}
+	if opts.HTTPClient != nil {
+		setters = append(setters, okta.WithHttpClientPtr(opts.HTTPClient))
+	} else {
+		setters = append(setters, okta.WithHttpClientPtr(&http.Client{Timeout: requestTimeout * time.Second}))
 	}
 
-	if cfg.PrivateKeyID != "" {
-		opts = append(opts, okta.WithPrivateKeyId(cfg.PrivateKeyID))
-	}
-
-	if certPool, ok := ctx.Value(certPoolKey{}).(*x509.CertPool); ok && certPool != nil {
-		httpClient := &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{
-					RootCAs: certPool,
-				},
-			},
-		}
-		opts = append(opts, okta.WithHttpClientPtr(httpClient))
-	}
-
-	oktaCfg, err := okta.NewConfiguration(opts...)
+	cfg, err := okta.NewConfiguration(setters...)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to create okta configuration")
+		return nil, fmt.Errorf("failed to create okta configuration: %w", err)
 	}
 
-	// v6 SDK parses OrgUrl and uses url.Parse().Hostname() which strips the port
-	// for testing with custom ports, we need to override the server configuration
-	// the SDK uses Servers[0].URL for building API call URLs
-	if cfg.BaseURL != "" {
-		parsedURL, err := url.Parse(cfg.BaseURL)
-		if err == nil {
-			// Override the default server configuration with full URL including port
-			oktaCfg.Servers = okta.ServerConfigurations{
-				okta.ServerConfiguration{
-					URL:         cfg.BaseURL,
-					Description: "Custom Okta server (test mode)",
-				},
-			}
-			// Also update Host and Scheme for consistency
-			// Include port in Host if present
-			if parsedURL.Port() != "" {
-				oktaCfg.Host = parsedURL.Host // Host includes port
-			} else {
-				oktaCfg.Host = parsedURL.Hostname()
-			}
-			oktaCfg.Scheme = parsedURL.Scheme
+	// the SDK builds request URLs from the host name alone, dropping any
+	// port, so a base URL with one (a test server) replaces the server list
+	if opts.BaseURL != "" {
+		u, err := url.Parse(opts.BaseURL)
+		if err != nil || u.Host == "" {
+			return nil, fmt.Errorf("invalid okta base url %q", opts.BaseURL)
 		}
-	}
-
-	apiClient := okta.NewAPIClient(oktaCfg)
-
-	logger := cfg.Logger
-	if logger == nil {
-		logger = slog.Default()
+		cfg.Servers = okta.ServerConfigurations{{URL: strings.TrimRight(opts.BaseURL, "/")}}
+		cfg.Host = u.Host
+		cfg.Scheme = u.Scheme
 	}
 
 	return &Client{
-		apiClient:       apiClient,
-		githubUserField: cfg.GitHubUserField,
-		logger:          logger,
+		api:             okta.NewAPIClient(cfg),
+		githubUserField: opts.GitHubUserField,
 	}, nil
 }
 
-// GetAPIClient returns the underlying Okta SDK API client.
-func (c *Client) GetAPIClient() *okta.APIClient {
-	return c.apiClient
-}
-
-// ListGroups fetches all Okta groups with pagination.
-func (c *Client) ListGroups(ctx context.Context) ([]okta.Group, error) {
-	groups, resp, err := c.apiClient.GroupAPI.ListGroups(ctx).Limit(200).Execute()
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to list groups")
+// toPKCS1 returns a PEM-encoded RSA private key in PKCS#1 form, which the
+// Okta SDK requires. Okta's console generates PKCS#8 keys, so those are
+// converted. Escaped newlines ("\n") are accepted.
+func toPKCS1(keyPEM []byte) ([]byte, error) {
+	if len(keyPEM) == 0 {
+		return nil, errors.New("okta private key is required")
+	}
+	keyPEM = []byte(strings.ReplaceAll(string(keyPEM), `\n`, "\n"))
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		return nil, errors.New("failed to decode okta private key: not pem encoded")
 	}
 
-	allGroups := make([]okta.Group, 0, len(groups))
-	allGroups = append(allGroups, groups...)
-
-	for resp != nil && resp.HasNextPage() {
-		var nextGroups []okta.Group
-		resp, err = resp.Next(&nextGroups)
+	switch block.Type {
+	case "RSA PRIVATE KEY":
+		if _, err := x509.ParsePKCS1PrivateKey(block.Bytes); err != nil {
+			return nil, fmt.Errorf("failed to parse okta private key: %w", err)
+		}
+		return keyPEM, nil
+	case "PRIVATE KEY":
+		key, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 		if err != nil {
-			return nil, errors.Wrap(err, "failed to fetch next page of groups")
+			return nil, fmt.Errorf("failed to parse okta private key: %w", err)
 		}
-		allGroups = append(allGroups, nextGroups...)
-	}
-
-	return allGroups, nil
-}
-
-// GetGroupByName searches for an Okta group by exact name match.
-// paginates through results in case the group is not on the first page.
-func (c *Client) GetGroupByName(ctx context.Context, name string) (*okta.Group, error) {
-	groups, resp, err := c.apiClient.GroupAPI.ListGroups(ctx).Q(name).Limit(200).Execute()
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to search for group '%s'", name)
-	}
-
-	for {
-		for i := range groups {
-			group := &groups[i]
-			groupName := extractGroupName(group)
-			if groupName == name {
-				return group, nil
-			}
+		rsaKey, ok := key.(*rsa.PrivateKey)
+		if !ok {
+			return nil, errors.New("okta private key is not an rsa key")
 		}
-
-		if resp == nil || !resp.HasNextPage() {
-			break
-		}
-
-		var nextGroups []okta.Group
-		resp, err = resp.Next(&nextGroups)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to fetch next page while searching for group '%s'", name)
-		}
-		groups = nextGroups
-	}
-
-	return nil, errors.Newf("group '%s' not found", name)
-}
-
-// GetGroupMembers fetches GitHub usernames for all active members of an Okta
-// group. paginates through all members. only includes users with status
-// "ACTIVE" to exclude suspended/deprovisioned users. skips users without a
-// GitHub username in their profile and tracks them separately.
-func (c *Client) GetGroupMembers(ctx context.Context, groupID string) (*domain.GroupMembersResult, error) {
-	users, resp, err := c.apiClient.GroupAPI.ListGroupUsers(ctx, groupID).Limit(200).Execute()
-	if err != nil {
-		return nil, errors.Wrapf(err, "failed to list members for group '%s'", groupID)
-	}
-
-	result := &domain.GroupMembersResult{
-		Members:                 make([]string, 0, len(users)),
-		SkippedNoGitHubUsername: []string{},
-	}
-
-	for {
-		c.processGroupUsers(users, result)
-
-		if resp == nil || !resp.HasNextPage() {
-			break
-		}
-
-		var nextUsers []okta.User
-		resp, err = resp.Next(&nextUsers)
-		if err != nil {
-			return nil, errors.Wrapf(err, "failed to fetch next page of members for group '%s'", groupID)
-		}
-		users = nextUsers
-	}
-
-	return result, nil
-}
-
-// processGroupUsers extracts GitHub usernames from a batch of Okta users
-// and appends them to the result.
-func (c *Client) processGroupUsers(users []okta.User, result *domain.GroupMembersResult) {
-	for _, user := range users {
-		if user.GetStatus() != "ACTIVE" {
-			continue
-		}
-
-		profile := user.GetProfile()
-		additionalProps := profile.AdditionalProperties
-		if additionalProps == nil {
-			continue
-		}
-
-		githubUsername, ok := additionalProps[c.githubUserField]
-		if ok {
-			if username, ok := githubUsername.(string); ok && username != "" {
-				result.Members = append(result.Members, username)
-				continue
-			}
-		}
-
-		// user doesn't have github username, track by email
-		if email, ok := additionalProps["email"].(string); ok && email != "" {
-			result.SkippedNoGitHubUsername = append(
-				result.SkippedNoGitHubUsername, email)
-		} else if profile.GetEmail() != "" {
-			result.SkippedNoGitHubUsername = append(
-				result.SkippedNoGitHubUsername, profile.GetEmail())
-		}
+		return pem.EncodeToMemory(&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+		}), nil
+	default:
+		return nil, fmt.Errorf("unsupported okta private key type '%s'", block.Type)
 	}
 }

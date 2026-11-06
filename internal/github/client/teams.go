@@ -5,82 +5,147 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cockroachdb/errors"
+	"github.com/google/go-github/v93/github"
+
 	"github.com/cruxstack/github-ops-app/internal/domain"
-	"github.com/google/go-github/v79/github"
 )
 
-// compile-time assertion
-var _ domain.GitHubClient = (*Client)(nil)
-
-// GetOrCreateTeam fetches an existing team by slug or creates it if missing.
-func (c *Client) GetOrCreateTeam(ctx context.Context, teamName, privacy string) (*github.Team, error) {
-	if err := c.ensureValidToken(ctx); err != nil {
-		return nil, err
+// ResolveTeam returns the slug of the team with the given name, creating the
+// team when it is missing and create is true.
+func (c *Client) ResolveTeam(ctx context.Context, name, privacy string, create bool) (string, error) {
+	slug := domain.TeamSlug(name)
+	if slug == "" {
+		return "", fmt.Errorf("invalid team name '%s'", name)
 	}
 
-	team, resp, err := c.client.Teams.GetTeamBySlug(ctx, c.org, teamName)
+	team, resp, err := c.gh.Teams.GetTeamBySlug(ctx, c.org, slug)
 	if err == nil {
-		return team, nil
+		return team.GetSlug(), nil
+	}
+	if !isNotFound(resp) {
+		return "", fmt.Errorf("failed to fetch team '%s' from org '%s': %w", slug, c.org, err)
 	}
 
-	if resp == nil || resp.StatusCode != 404 {
-		return nil, errors.Wrapf(err, "failed to fetch team '%s' from org '%s'", teamName, c.org)
+	// the slug guess can miss for names GitHub slugifies differently
+	if found, err := c.findTeamByName(ctx, name); err != nil || found != "" {
+		return found, err
 	}
 
-	newTeam := &github.NewTeam{
-		Name:    teamName,
-		Privacy: &privacy,
+	if !create {
+		return "", fmt.Errorf("team '%s' in org '%s' does not exist and create_team_if_missing is false: %w", name, c.org, domain.ErrTeamNotFound)
 	}
-	team, _, err = c.client.Teams.CreateTeam(ctx, c.org, *newTeam)
+
+	team, _, err = c.gh.Teams.CreateTeam(ctx, c.org, github.CreateTeamRequest{
+		Name:    name,
+		Privacy: new(privacy),
+	})
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to create team '%s' in org '%s'", teamName, c.org)
+		return "", fmt.Errorf("failed to create team '%s' in org '%s': %w", name, c.org, err)
 	}
-	return team, nil
+	return team.GetSlug(), nil
 }
 
-// GetTeamMembers returns GitHub usernames of all team members.
-// paginates through all results to handle large teams.
-func (c *Client) GetTeamMembers(ctx context.Context, teamSlug string) ([]string, error) {
-	if err := c.ensureValidToken(ctx); err != nil {
-		return nil, err
-	}
-
-	opts := &github.TeamListTeamMembersOptions{
-		ListOptions: github.ListOptions{PerPage: 100},
-	}
-
-	var allMembers []string
-	for {
-		members, resp, err := c.client.Teams.ListTeamMembersBySlug(ctx, c.org, teamSlug, opts)
+// findTeamByName returns the slug of the team named name, ignoring case, or
+// "" if there is none.
+func (c *Client) findTeamByName(ctx context.Context, name string) (string, error) {
+	for team, err := range c.gh.Teams.ListTeamsIter(ctx, c.org, &github.ListOptions{PerPage: 100}) {
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to list members for team '%s'", teamSlug)
+			return "", fmt.Errorf("failed to list teams in org '%s': %w", c.org, err)
 		}
-
-		for _, member := range members {
-			if member.Login != nil {
-				allMembers = append(allMembers, *member.Login)
-			}
+		if strings.EqualFold(team.GetName(), name) {
+			return team.GetSlug(), nil
 		}
-
-		if resp.NextPage == 0 {
-			break
-		}
-		opts.Page = resp.NextPage
 	}
-
-	return allMembers, nil
+	return "", nil
 }
 
-// SyncTeamMembers adds and removes members to match desired state.
-// collects errors for individual operations but continues processing. skips
-// removal of external collaborators (outside org members). applies safety
-// threshold to prevent mass removal during outages.
-func (c *Client) SyncTeamMembers(ctx context.Context, teamSlug string, desiredMembers []string, safetyThreshold float64) (*domain.TeamSyncResult, error) {
-	if err := c.ensureValidToken(ctx); err != nil {
-		return nil, err
+// GetTeamMembers returns the logins of all team members.
+func (c *Client) GetTeamMembers(ctx context.Context, teamSlug string) ([]string, error) {
+	opts := &github.TeamListTeamMembersOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	var members []string
+	for member, err := range c.gh.Teams.ListTeamMembersBySlugIter(ctx, c.org, teamSlug, opts) {
+		if err != nil {
+			return nil, fmt.Errorf("failed to list members for team '%s': %w", teamSlug, err)
+		}
+		if login := member.GetLogin(); login != "" {
+			members = append(members, login)
+		}
 	}
+	return members, nil
+}
 
+// pendingTeamInvitations returns the logins, lowercased, of users invited to
+// the org through the team who have not accepted yet.
+func (c *Client) pendingTeamInvitations(ctx context.Context, teamSlug string) (map[string]bool, error) {
+	pending := make(map[string]bool)
+	opts := &github.ListOptions{PerPage: 100}
+	for inv, err := range c.gh.Teams.ListPendingTeamInvitationsBySlugIter(ctx, c.org, teamSlug, opts) {
+		if err != nil {
+			return nil, fmt.Errorf("failed to list pending invitations for team '%s': %w", teamSlug, err)
+		}
+		if login := inv.GetLogin(); login != "" {
+			pending[strings.ToLower(login)] = true
+		}
+	}
+	return pending, nil
+}
+
+// ListOrgMembers returns the logins of all organization members. Outside
+// collaborators are not members, so they are not included.
+func (c *Client) ListOrgMembers(ctx context.Context) ([]string, error) {
+	opts := &github.ListMembersOptions{ListOptions: github.ListOptions{PerPage: 100}}
+	var members []string
+	for member, err := range c.gh.Organizations.ListMembersIter(ctx, c.org, opts) {
+		if err != nil {
+			return nil, fmt.Errorf("failed to list members for org '%s': %w", c.org, err)
+		}
+		if login := member.GetLogin(); login != "" {
+			members = append(members, login)
+		}
+	}
+	return members, nil
+}
+
+// isOrgMember returns true if the user is a member of the org.
+func (c *Client) isOrgMember(ctx context.Context, login string) (bool, error) {
+	membership, resp, err := c.gh.Organizations.GetOrgMembership(ctx, login, c.org)
+	if err != nil {
+		if isNotFound(resp) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check org membership for user '%s': %w", login, err)
+	}
+	return membership != nil, nil
+}
+
+// childTeamMembers returns the logins, lowercased, of the members of a
+// team's child teams. GitHub lists them as members of the parent team, but
+// they can only be removed from the child team.
+func (c *Client) childTeamMembers(ctx context.Context, teamSlug string) (map[string]bool, error) {
+	members := make(map[string]bool)
+	for child, err := range c.gh.Teams.ListChildTeamsByParentSlugIter(ctx, c.org, teamSlug, &github.ListOptions{PerPage: 100}) {
+		if err != nil {
+			return nil, fmt.Errorf("failed to list child teams of team '%s': %w", teamSlug, err)
+		}
+		// a child team's member list includes its own child teams
+		logins, err := c.GetTeamMembers(ctx, child.GetSlug())
+		if err != nil {
+			return nil, err
+		}
+		for _, login := range logins {
+			members[strings.ToLower(login)] = true
+		}
+	}
+	return members, nil
+}
+
+// SyncTeamMembers adds and removes members so the team matches
+// desiredMembers. Errors for individual users are collected and the rest
+// continue. Members of child teams and users who are not org members are not
+// removed, and no one is removed if more than safetyThreshold of the team's
+// direct members would be, which guards against an empty or partial member
+// list from Okta.
+func (c *Client) SyncTeamMembers(ctx context.Context, teamSlug string, desiredMembers []string, safetyThreshold float64) (*domain.TeamSyncResult, error) {
 	result := &domain.TeamSyncResult{
 		TeamName:               teamSlug,
 		MembersAdded:           []string{},
@@ -89,71 +154,110 @@ func (c *Client) SyncTeamMembers(ctx context.Context, teamSlug string, desiredMe
 		Errors:                 []string{},
 	}
 
-	currentMembers, err := c.GetTeamMembers(ctx, teamSlug)
+	listed, err := c.GetTeamMembers(ctx, teamSlug)
 	if err != nil {
-		return nil, errors.Wrapf(err, "failed to fetch current members for team '%s'", teamSlug)
+		return nil, err
+	}
+	pending, err := c.pendingTeamInvitations(ctx, teamSlug)
+	if err != nil {
+		return nil, err
+	}
+	inChildTeam, err := c.childTeamMembers(ctx, teamSlug)
+	if err != nil {
+		return nil, err
 	}
 
-	currentSet := make(map[string]bool)
-	for _, member := range currentMembers {
-		currentSet[strings.ToLower(member)] = true
+	current := make(map[string]bool, len(listed))
+	var direct []string
+	for _, member := range listed {
+		key := strings.ToLower(member)
+		current[key] = true
+		if !inChildTeam[key] {
+			direct = append(direct, member)
+		}
 	}
 
-	desiredSet := make(map[string]bool)
+	desired := make(map[string]bool, len(desiredMembers))
+	var toAdd []string
 	for _, member := range desiredMembers {
-		desiredSet[strings.ToLower(member)] = true
-	}
-
-	for _, desired := range desiredMembers {
-		if !currentSet[strings.ToLower(desired)] {
-			_, _, err := c.client.Teams.AddTeamMembershipBySlug(ctx, c.org, teamSlug, desired, nil)
-			if err != nil {
-				errMsg := fmt.Sprintf("failed to add '%s' to team '%s': %v", desired, teamSlug, err)
-				result.Errors = append(result.Errors, errMsg)
-			} else {
-				result.MembersAdded = append(result.MembersAdded, desired)
-			}
+		key := strings.ToLower(member)
+		if desired[key] {
+			continue
+		}
+		desired[key] = true
+		if !domain.IsValidGitHubLogin(member) {
+			result.Errors = append(result.Errors, fmt.Sprintf("skipped invalid github username '%s'", member))
+			continue
+		}
+		if !current[key] && !pending[key] {
+			toAdd = append(toAdd, member)
 		}
 	}
 
 	var toRemove []string
-	for _, current := range currentMembers {
-		if !desiredSet[strings.ToLower(current)] {
-			toRemove = append(toRemove, current)
+	for _, member := range direct {
+		if !desired[strings.ToLower(member)] {
+			toRemove = append(toRemove, member)
 		}
 	}
 
-	if len(currentMembers) > 0 {
-		removalRatio := float64(len(toRemove)) / float64(len(currentMembers))
-		if removalRatio > safetyThreshold {
-			errMsg := fmt.Sprintf("refusing to remove %d of %d members (%.0f%%) as it exceeds safety threshold of %.0f%%",
-				len(toRemove), len(currentMembers), removalRatio*100, safetyThreshold*100)
-			result.Errors = append(result.Errors, errMsg)
+	for _, login := range toAdd {
+		if _, _, err := c.gh.Teams.AddTeamMembershipBySlug(ctx, c.org, teamSlug, login, github.AddTeamMembershipRequest{}); err != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("failed to add '%s' to team '%s': %v", login, teamSlug, err))
+			continue
+		}
+		result.MembersAdded = append(result.MembersAdded, login)
+	}
+
+	removed := make(map[string]bool)
+	defer func() {
+		result.Members = finalMembers(listed, result.MembersAdded, removed)
+	}()
+
+	if len(direct) > 0 && len(toRemove) > 0 {
+		ratio := float64(len(toRemove)) / float64(len(direct))
+		if ratio > safetyThreshold {
+			result.Errors = append(result.Errors, fmt.Sprintf(
+				"refusing to remove %d of %d members (%.0f%%) from team '%s' as it exceeds the safety threshold of %.0f%%",
+				len(toRemove), len(direct), ratio*100, teamSlug, safetyThreshold*100))
 			return result, nil
 		}
 	}
 
-	for _, username := range toRemove {
-		isExternal, err := c.IsExternalCollaborator(ctx, username)
+	for _, login := range toRemove {
+		member, err := c.isOrgMember(ctx, login)
 		if err != nil {
-			errMsg := fmt.Sprintf("failed to check if '%s' is external: %v", username, err)
-			result.Errors = append(result.Errors, errMsg)
+			result.Errors = append(result.Errors, err.Error())
+			continue
+		}
+		if !member {
+			result.MembersSkippedExternal = append(result.MembersSkippedExternal, login)
 			continue
 		}
 
-		if isExternal {
-			result.MembersSkippedExternal = append(result.MembersSkippedExternal, username)
+		resp, err := c.gh.Teams.RemoveTeamMembershipBySlug(ctx, c.org, teamSlug, login)
+		if err != nil {
+			// a 404 means they already left; nothing was removed
+			if !isNotFound(resp) {
+				result.Errors = append(result.Errors, fmt.Sprintf("failed to remove '%s' from team '%s': %v", login, teamSlug, err))
+			}
 			continue
 		}
-
-		_, err = c.client.Teams.RemoveTeamMembershipBySlug(ctx, c.org, teamSlug, username)
-		if err != nil {
-			errMsg := fmt.Sprintf("failed to remove '%s' from team '%s': %v", username, teamSlug, err)
-			result.Errors = append(result.Errors, errMsg)
-		} else {
-			result.MembersRemoved = append(result.MembersRemoved, username)
-		}
+		removed[strings.ToLower(login)] = true
+		result.MembersRemoved = append(result.MembersRemoved, login)
 	}
 
 	return result, nil
+}
+
+// finalMembers returns the members listed before the sync, plus those added
+// and minus those removed.
+func finalMembers(listed, added []string, removed map[string]bool) []string {
+	members := make([]string, 0, len(listed)+len(added))
+	for _, login := range listed {
+		if !removed[strings.ToLower(login)] {
+			members = append(members, login)
+		}
+	}
+	return append(members, added...)
 }
