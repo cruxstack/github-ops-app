@@ -1,5 +1,11 @@
-.local/
+.git
+.github
+.devcontainer
+.worktrees
+.local
 .env
-dist/
-tmp/
-.git/
+dist
+release
+tmp
+coverage.out
+.DS_Store
