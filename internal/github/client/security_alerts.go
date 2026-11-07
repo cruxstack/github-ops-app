@@ -2,283 +2,193 @@ package client
 
 import (
 	"context"
-	"math"
+	"fmt"
+	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/cockroachdb/errors"
+	"github.com/google/go-github/v93/github"
+
 	"github.com/cruxstack/github-ops-app/internal/domain"
-	"github.com/google/go-github/v79/github"
 )
 
-// severityRank maps severity strings to numeric values for comparison.
-// higher values indicate greater severity.
-var severityRank = map[string]int{
-	"critical": 4,
-	"high":     3,
-	"medium":   2,
-	"low":      1,
+// Alert types in a security alerts report.
+const (
+	AlertTypeDependabot     = "dependabot"
+	AlertTypeCodeScanning   = "code_scanning"
+	AlertTypeSecretScanning = "secret_scanning"
+)
+
+// secretScanningSeverity is the severity given to secret scanning alerts,
+// which have none in the GitHub API. They are reported unless the minimum
+// severity is critical.
+const secretScanningSeverity = domain.SeverityHigh
+
+// maxSummaryLen is the longest alert summary kept, in runes.
+const maxSummaryLen = 120
+
+// codeScanningRuleSeverity maps the severity of a code scanning rule without
+// a security severity level to one.
+var codeScanningRuleSeverity = map[string]string{
+	"error":   domain.SeverityHigh,
+	"warning": domain.SeverityMedium,
+	"note":    domain.SeverityLow,
 }
 
-// meetsMinSeverity returns true if the alert severity is at or above
-// the minimum threshold.
-func meetsMinSeverity(alertSeverity, minSeverity string) bool {
-	return severityRank[alertSeverity] >= severityRank[minSeverity]
-}
-
-// ListSecurityAlerts fetches open security alerts across the org that
-// are older than minAgeDays and at or above minSeverity. covers
-// dependabot, code scanning, and secret scanning alerts.
+// ListSecurityAlerts fetches open security alerts across the org that were
+// created more than minAgeDays ago and are at or above minSeverity. It
+// covers dependabot, code scanning, and secret scanning alerts. A source that
+// fails is recorded in the report's errors and the others still run.
 func (c *Client) ListSecurityAlerts(ctx context.Context, minAgeDays int, minSeverity string) (*domain.SecurityAlertsReport, error) {
-	if err := c.ensureValidToken(ctx); err != nil {
-		return nil, err
-	}
-
-	cutoff := time.Now().AddDate(0, 0, -minAgeDays)
+	now := time.Now()
+	cutoff := now.AddDate(0, 0, -minAgeDays)
 
 	report := &domain.SecurityAlertsReport{
 		MinAgeDays:   minAgeDays,
 		MinSeverity:  minSeverity,
 		AlertsByRepo: make(map[string][]domain.SecurityAlert),
 	}
-
-	c.fetchDependabotAlerts(ctx, cutoff, minSeverity, report)
-	c.fetchCodeScanningAlerts(ctx, cutoff, minSeverity, report)
-	c.fetchSecretScanningAlerts(ctx, cutoff, report)
-
-	total := 0
-	for _, alerts := range report.AlertsByRepo {
-		total += len(alerts)
+	add := func(alert domain.SecurityAlert) {
+		alert.AgeDays = int(now.Sub(alert.CreatedAt).Hours() / 24)
+		alert.Summary = truncate(alert.Summary, maxSummaryLen)
+		report.AlertsByRepo[alert.Repo] = append(report.AlertsByRepo[alert.Repo], alert)
+		report.TotalAlerts++
 	}
-	report.TotalAlerts = total
+
+	for _, fetch := range []func(context.Context, time.Time, string, func(domain.SecurityAlert)) error{
+		c.fetchDependabotAlerts,
+		c.fetchCodeScanningAlerts,
+		c.fetchSecretScanningAlerts,
+	} {
+		if err := fetch(ctx, cutoff, minSeverity, add); err != nil {
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			report.Errors = append(report.Errors, err.Error())
+		}
+	}
 
 	return report, nil
 }
 
-// fetchDependabotAlerts fetches open dependabot alerts for the org,
-// filtering by severity and age. results are sorted by creation date
-// ascending so the pagination early-exit works correctly: once a page
-// contains only alerts newer than the cutoff, all subsequent pages
-// will also be newer.
-func (c *Client) fetchDependabotAlerts(ctx context.Context, cutoff time.Time, minSeverity string, report *domain.SecurityAlertsReport) {
-	state := "open"
+// The fetchers below request alerts oldest first, so they stop paging at
+// the first alert created after the cutoff.
+
+func (c *Client) fetchDependabotAlerts(ctx context.Context, cutoff time.Time, minSeverity string, add func(domain.SecurityAlert)) error {
 	opts := &github.ListAlertsOptions{
-		State:     &state,
-		Sort:      github.Ptr("created"),
-		Direction: github.Ptr("asc"),
-		ListCursorOptions: github.ListCursorOptions{
-			PerPage: 100,
-		},
+		State:             new("open"),
+		Sort:              new("created"),
+		Direction:         new("asc"),
+		ListCursorOptions: github.ListCursorOptions{PerPage: 100},
 	}
-
-	for {
-		alerts, resp, err := c.client.Dependabot.ListOrgAlerts(ctx, c.org, opts)
+	for alert, err := range c.gh.Dependabot.ListOrgAlertsIter(ctx, c.org, opts) {
 		if err != nil {
-			report.Errors = append(report.Errors,
-				errors.Wrapf(err, "failed to fetch dependabot alerts for org '%s'", c.org).Error())
-			return
+			return fmt.Errorf("failed to fetch dependabot alerts for org '%s': %w", c.org, err)
 		}
-
-		pastCutoff := false
-		for _, alert := range alerts {
-			created := alert.GetCreatedAt().Time
-			if !created.Before(cutoff) {
-				pastCutoff = true
-				break
-			}
-
-			sev := ""
-			if alert.SecurityAdvisory != nil {
-				sev = alert.SecurityAdvisory.GetSeverity()
-			}
-			if sev == "" && alert.SecurityVulnerability != nil &&
-				alert.SecurityVulnerability.Severity != nil {
-				sev = *alert.SecurityVulnerability.Severity
-			}
-
-			if !meetsMinSeverity(sev, minSeverity) {
-				continue
-			}
-
-			repo := ""
-			if alert.Repository != nil {
-				repo = alert.Repository.GetFullName()
-			}
-
-			ageDays := int(math.Floor(
-				time.Since(created).Hours() / 24,
-			))
-
-			report.AlertsByRepo[repo] = append(
-				report.AlertsByRepo[repo],
-				domain.SecurityAlert{
-					Type:      "dependabot",
-					Repo:      repo,
-					Number:    alert.GetNumber(),
-					Severity:  sev,
-					Summary:   truncate(alert.SecurityAdvisory.GetSummary(), 120),
-					HTMLURL:   alert.GetHTMLURL(),
-					CreatedAt: created,
-					AgeDays:   ageDays,
-				},
-			)
-		}
-
-		if resp.NextPageToken == "" || pastCutoff {
+		created := alert.GetCreatedAt().Time
+		if !created.Before(cutoff) {
 			break
 		}
-		opts.ListCursorOptions.After = resp.NextPageToken
+
+		severity := alert.GetSecurityAdvisory().GetSeverity()
+		if severity == "" {
+			severity = alert.GetSecurityVulnerability().GetSeverity()
+		}
+		if !domain.MeetsSeverity(severity, minSeverity) {
+			continue
+		}
+
+		add(domain.SecurityAlert{
+			Type:      AlertTypeDependabot,
+			Repo:      alert.GetRepository().GetFullName(),
+			Number:    alert.GetNumber(),
+			Severity:  strings.ToLower(severity),
+			Summary:   alert.GetSecurityAdvisory().GetSummary(),
+			HTMLURL:   alert.GetHTMLURL(),
+			CreatedAt: created,
+		})
 	}
+	return nil
 }
 
-// fetchCodeScanningAlerts fetches open code scanning alerts for the
-// org, filtering by severity and age. results are sorted ascending
-// by creation date so the early-exit optimization works correctly.
-// the code scanning API only accepts a single severity value, so we
-// fetch all severities and filter client-side via meetsMinSeverity.
-func (c *Client) fetchCodeScanningAlerts(ctx context.Context, cutoff time.Time, minSeverity string, report *domain.SecurityAlertsReport) {
+// codeScanningSeverity returns an alert's security severity level, or a
+// severity mapped from its rule's severity for rules without one.
+func codeScanningSeverity(alert *github.Alert) string {
+	if level := alert.GetRule().GetSecuritySeverityLevel(); level != "" {
+		return strings.ToLower(level)
+	}
+	return codeScanningRuleSeverity[strings.ToLower(alert.GetRule().GetSeverity())]
+}
+
+func (c *Client) fetchCodeScanningAlerts(ctx context.Context, cutoff time.Time, minSeverity string, add func(domain.SecurityAlert)) error {
+	// the API filters by a single severity, so severities are filtered here
 	opts := &github.AlertListOptions{
-		State:     "open",
-		Sort:      "created",
-		Direction: "asc",
-		ListCursorOptions: github.ListCursorOptions{
-			PerPage: 100,
-		},
+		State:             "open",
+		Sort:              "created",
+		Direction:         "asc",
+		ListCursorOptions: github.ListCursorOptions{PerPage: 100},
 	}
-
-	for {
-		alerts, resp, err := c.client.CodeScanning.ListAlertsForOrg(ctx, c.org, opts)
+	for alert, err := range c.gh.CodeScanning.ListAlertsForOrgIter(ctx, c.org, opts) {
 		if err != nil {
-			report.Errors = append(report.Errors,
-				errors.Wrapf(err, "failed to fetch code scanning alerts for org '%s'", c.org).Error())
-			return
+			return fmt.Errorf("failed to fetch code scanning alerts for org '%s': %w", c.org, err)
 		}
-
-		pastCutoff := false
-		for _, alert := range alerts {
-			created := alert.GetCreatedAt().Time
-			if !created.Before(cutoff) {
-				pastCutoff = true
-				break
-			}
-
-			sev := ""
-			if alert.Rule != nil {
-				sev = alert.Rule.GetSecuritySeverityLevel()
-				if sev == "" {
-					sev = alert.Rule.GetSeverity()
-				}
-			}
-
-			// alerts with unknown severity are included
-			// conservatively; we only exclude alerts that have a
-			// known severity below the threshold.
-			if sev != "" && !meetsMinSeverity(sev, minSeverity) {
-				continue
-			}
-
-			repo := ""
-			if alert.Repository != nil {
-				repo = alert.Repository.GetFullName()
-			}
-
-			summary := ""
-			if alert.Rule != nil {
-				summary = alert.Rule.GetDescription()
-			}
-
-			ageDays := int(math.Floor(
-				time.Since(created).Hours() / 24,
-			))
-
-			report.AlertsByRepo[repo] = append(
-				report.AlertsByRepo[repo],
-				domain.SecurityAlert{
-					Type:      "code_scanning",
-					Repo:      repo,
-					Number:    int(alert.GetNumber()),
-					Severity:  sev,
-					Summary:   truncate(summary, 120),
-					HTMLURL:   alert.GetHTMLURL(),
-					CreatedAt: created,
-					AgeDays:   ageDays,
-				},
-			)
-		}
-
-		if resp.NextPageToken == "" || pastCutoff {
+		created := alert.GetCreatedAt().Time
+		if !created.Before(cutoff) {
 			break
 		}
-		opts.ListCursorOptions.After = resp.NextPageToken
+
+		severity := codeScanningSeverity(alert)
+		if !domain.MeetsSeverity(severity, minSeverity) {
+			continue
+		}
+
+		add(domain.SecurityAlert{
+			Type:      AlertTypeCodeScanning,
+			Repo:      alert.GetRepository().GetFullName(),
+			Number:    alert.GetNumber(),
+			Severity:  severity,
+			Summary:   alert.GetRule().GetDescription(),
+			HTMLURL:   alert.GetHTMLURL(),
+			CreatedAt: created,
+		})
 	}
+	return nil
 }
 
-// fetchSecretScanningAlerts fetches open secret scanning alerts for
-// the org, filtering by age only. results are sorted ascending by
-// creation date so the early-exit optimization works correctly.
-// secret scanning alerts have no severity in the GitHub API, so we
-// assign "high" to ensure they are included when minSeverity is
-// "high" or below but excluded when minSeverity is "critical".
-func (c *Client) fetchSecretScanningAlerts(ctx context.Context, cutoff time.Time, report *domain.SecurityAlertsReport) {
+func (c *Client) fetchSecretScanningAlerts(ctx context.Context, cutoff time.Time, minSeverity string, add func(domain.SecurityAlert)) error {
+	if !domain.MeetsSeverity(secretScanningSeverity, minSeverity) {
+		return nil
+	}
+
 	opts := &github.SecretScanningAlertListOptions{
-		State:     "open",
-		Sort:      "created",
-		Direction: "asc",
-		ListCursorOptions: github.ListCursorOptions{
-			PerPage: 100,
-		},
+		State:             "open",
+		Sort:              "created",
+		Direction:         "asc",
+		ListCursorOptions: github.ListCursorOptions{PerPage: 100},
 	}
-
-	for {
-		alerts, resp, err := c.client.SecretScanning.ListAlertsForOrg(ctx, c.org, opts)
+	for alert, err := range c.gh.SecretScanning.ListAlertsForOrgIter(ctx, c.org, opts) {
 		if err != nil {
-			report.Errors = append(report.Errors,
-				errors.Wrapf(err, "failed to fetch secret scanning alerts for org '%s'", c.org).Error())
-			return
+			return fmt.Errorf("failed to fetch secret scanning alerts for org '%s': %w", c.org, err)
 		}
-
-		pastCutoff := false
-		for _, alert := range alerts {
-			created := alert.GetCreatedAt().Time
-			if !created.Before(cutoff) {
-				pastCutoff = true
-				break
-			}
-
-			repo := ""
-			if alert.Repository != nil {
-				repo = alert.Repository.GetFullName()
-			}
-
-			ageDays := int(math.Floor(
-				time.Since(created).Hours() / 24,
-			))
-
-			report.AlertsByRepo[repo] = append(
-				report.AlertsByRepo[repo],
-				domain.SecurityAlert{
-					Type:      "secret_scanning",
-					Repo:      repo,
-					Number:    alert.GetNumber(),
-					Severity:  "high",
-					Summary:   truncate(alert.GetSecretTypeDisplayName(), 120),
-					HTMLURL:   alert.GetHTMLURL(),
-					CreatedAt: created,
-					AgeDays:   ageDays,
-				},
-			)
-		}
-
-		if resp.NextPageToken == "" || pastCutoff {
+		created := alert.GetCreatedAt().Time
+		if !created.Before(cutoff) {
 			break
 		}
-		opts.ListCursorOptions.After = resp.NextPageToken
+
+		add(domain.SecurityAlert{
+			Type:      AlertTypeSecretScanning,
+			Repo:      alert.GetRepository().GetFullName(),
+			Number:    alert.GetNumber(),
+			Severity:  secretScanningSeverity,
+			Summary:   alert.GetSecretTypeDisplayName(),
+			HTMLURL:   alert.GetHTMLURL(),
+			CreatedAt: created,
+		})
 	}
+	return nil
 }
 
-// truncate shortens a string to max runes, appending "..." if
-// needed. operates on rune count so multi-byte characters are not
-// split mid-codepoint.
+// truncate shortens s to maxLen runes, ending with "..." when it was cut.
 func truncate(s string, maxLen int) string {
 	if utf8.RuneCountInString(s) <= maxLen {
 		return s

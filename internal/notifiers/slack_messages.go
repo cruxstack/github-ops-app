@@ -3,88 +3,62 @@ package notifiers
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
+	"strings"
 
-	"github.com/cockroachdb/errors"
-	"github.com/cruxstack/github-ops-app/internal/domain"
 	"github.com/slack-go/slack"
+
+	"github.com/cruxstack/github-ops-app/internal/domain"
 )
 
-// NotifyPRBypass sends a Slack notification when branch protection is
-// bypassed.
+// post sends blocks to a channel with a plain-text fallback.
+func (s *SlackNotifier) post(ctx context.Context, channel, fallback string, blocks []slack.Block) error {
+	_, _, err := s.client.PostMessageContext(ctx, channel,
+		slack.MsgOptionBlocks(limitBlocks(blocks)...),
+		slack.MsgOptionText(fallback, true),
+	)
+	return err
+}
+
+// NotifyPRBypass sends a Slack notification when a PR was merged without
+// meeting its branch's requirements.
 func (s *SlackNotifier) NotifyPRBypass(ctx context.Context, result *domain.PRComplianceResult, repoFullName string) error {
-	if result.PR == nil {
-		return errors.Wrap(domain.ErrMissingPRData, "pr result missing")
+	if result == nil || result.PR == nil {
+		return fmt.Errorf("pr result missing: %w", domain.ErrMissingPRData)
+	}
+	pr := result.PR
+
+	mergedBy := pr.GetMergedBy().GetLogin()
+	if mergedBy == "" {
+		mergedBy = "unknown"
+	}
+	mergedByText := "Merged by " + escape(mergedBy)
+	if result.UserHasBypass && result.UserBypassReason != "" {
+		mergedByText += " (" + escape(result.UserBypassReason) + ")"
 	}
 
-	prURL := ""
-	prTitle := "unknown pr"
-	prNumber := 0
-	mergedBy := "unknown"
-
-	if result.PR.HTMLURL != nil {
-		prURL = *result.PR.HTMLURL
-	}
-	if result.PR.Title != nil {
-		prTitle = *result.PR.Title
-	}
-	if result.PR.Number != nil {
-		prNumber = *result.PR.Number
-	}
-	if result.PR.MergedBy != nil && result.PR.MergedBy.Login != nil {
-		mergedBy = *result.PR.MergedBy.Login
-	}
-
-	// build merged by line with optional bypass reason
-	mergedByText := fmt.Sprintf("Merged by %s", mergedBy)
-	if result.UserHasBypass {
-		mergedByText = fmt.Sprintf("Merged by %s (%s)", mergedBy, result.UserBypassReason)
-	}
-
+	title := fmt.Sprintf("%s#%d", repoFullName, pr.GetNumber())
 	blocks := []slack.Block{
-		slack.NewHeaderBlock(
-			slack.NewTextBlockObject("plain_text", "🚨 Branch Protection Bypassed", false, false),
-		),
-		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("<%s|%s#%d> — %s", prURL, repoFullName, prNumber, prTitle), false, false),
-			nil, nil,
-		),
-		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", mergedByText, false, false),
-			nil, nil,
-		),
+		slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, "🚨 Branch Protection Bypassed", false, false)),
+		section(fmt.Sprintf("%s — %s", link(pr.GetHTMLURL(), title), escape(pr.GetTitle()))),
+		section(mergedByText + " into `" + escape(result.BaseBranch) + "`"),
 	}
 
-	if len(result.Violations) > 0 {
-		violationText := "*Violations:*\n"
-		for _, v := range result.Violations {
-			violationText += fmt.Sprintf("• %s\n", v.Description)
-		}
-		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", violationText, false, false),
-			nil, nil,
-		))
+	violations := make([]string, 0, len(result.Violations))
+	for _, v := range result.Violations {
+		violations = append(violations, "• "+escape(v.Description))
 	}
+	blocks = append(blocks, listSections("*Violations:*", violations)...)
 
 	if s.messages.PRBypassFooterNote != "" {
-		blocks = append(blocks, slack.NewContextBlock(
-			"footer",
-			slack.NewTextBlockObject("mrkdwn", s.messages.PRBypassFooterNote, false, false),
-		))
+		blocks = append(blocks, slack.NewContextBlock("footer", mrkdwn(s.messages.PRBypassFooterNote)))
 	}
 
-	channel := s.channelFor(s.channels.PRBypass)
-	_, _, err := s.client.PostMessageContext(
-		ctx,
-		channel,
-		slack.MsgOptionBlocks(blocks...),
-		slack.MsgOptionText(fmt.Sprintf("branch protection bypassed on pr #%d", prNumber), false),
-	)
-
+	err := s.post(ctx, s.channelFor(s.channels.PRBypass),
+		fmt.Sprintf("Branch protection bypassed on %s", title), blocks)
 	if err != nil {
-		return errors.Wrap(err, "failed to post pr bypass notification to slack")
+		return fmt.Errorf("failed to post pr bypass notification for %s to slack: %w", title, err)
 	}
-
 	return nil
 }
 
@@ -94,146 +68,70 @@ func (s *SlackNotifier) NotifyOktaSync(ctx context.Context, reports []*domain.Sy
 		return nil
 	}
 
-	// aggregate stats
 	var totalAdded, totalRemoved int
-	var rulesWithChanges, rulesWithoutChanges []*domain.SyncReport
-	var allErrors []string
-	var allSkippedExternal, allSkippedNoGHUsername []string
-
+	var changed, unchanged, errs, skippedExternal, skippedNoUsername []string
 	for _, report := range reports {
 		totalAdded += len(report.MembersAdded)
 		totalRemoved += len(report.MembersRemoved)
 
-		if report.HasChanges() {
-			rulesWithChanges = append(rulesWithChanges, report)
-		} else if !report.HasErrors() {
-			// only list as "no changes" if it didn't fail entirely
-			rulesWithoutChanges = append(rulesWithoutChanges, report)
+		team := s.teamLink(githubOrg, report.GitHubTeam)
+		switch {
+		case report.HasChanges():
+			changed = append(changed, fmt.Sprintf("• %s (+%d, -%d)", team, len(report.MembersAdded), len(report.MembersRemoved)))
+		case !report.HasErrors():
+			unchanged = append(unchanged, "• "+team)
 		}
-
 		for _, err := range report.Errors {
-			// use rule name as identifier since team/group may be empty on failure
-			allErrors = append(allErrors, fmt.Sprintf("%s: %s", report.Rule, err))
+			errs = append(errs, fmt.Sprintf("• %s: %s", escape(report.Rule), escape(err)))
 		}
-
-		allSkippedExternal = append(allSkippedExternal, report.MembersSkippedExternal...)
-		allSkippedNoGHUsername = append(allSkippedNoGHUsername, report.MembersSkippedNoGHUsername...)
+		for _, m := range report.MembersSkippedExternal {
+			skippedExternal = append(skippedExternal, "• "+escape(m))
+		}
+		for _, m := range report.MembersSkippedNoGHUsername {
+			skippedNoUsername = append(skippedNoUsername, "• "+escape(m))
+		}
 	}
 
 	blocks := []slack.Block{
-		slack.NewHeaderBlock(
-			slack.NewTextBlockObject("plain_text", "Okta GitHub Team Sync Complete", false, false),
-		),
+		slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, "Okta GitHub Team Sync Complete", false, false)),
+		slack.NewSectionBlock(nil, []*slack.TextBlockObject{
+			mrkdwn(fmt.Sprintf("*Teams Processed*\n%d", len(reports))),
+			mrkdwn(fmt.Sprintf("*Errors*\n%d", len(errs))),
+			mrkdwn(fmt.Sprintf("*Members Added*\n%d", totalAdded)),
+			mrkdwn(fmt.Sprintf("*Members Removed*\n%d", totalRemoved)),
+		}, nil),
 	}
 
-	// summary stats (slack allows max 2 columns per row)
-	rulesProcessedFields := []*slack.TextBlockObject{
-		slack.NewTextBlockObject("mrkdwn", "*Rules Processed*", false, false),
-		slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("%d", len(reports)), false, false),
-	}
-	memberChangesFields := []*slack.TextBlockObject{
-		slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*Members Added*\n%d", totalAdded), false, false),
-		slack.NewTextBlockObject("mrkdwn", fmt.Sprintf("*Members Removed*\n%d", totalRemoved), false, false),
-	}
-	blocks = append(blocks, slack.NewSectionBlock(nil, rulesProcessedFields, nil))
-	blocks = append(blocks, slack.NewSectionBlock(nil, memberChangesFields, nil))
-
-	// helper to build team URL
-	teamURL := func(teamSlug string) string {
-		return fmt.Sprintf("https://github.com/orgs/%s/teams/%s", githubOrg, teamSlug)
-	}
-
-	// list of rules with changes
-	if len(rulesWithChanges) > 0 {
-		blocks = append(blocks, slack.NewDividerBlock())
-
-		changesText := "*Rules With Changes*\n"
-		for _, report := range rulesWithChanges {
-			changesText += fmt.Sprintf("- <%s|%s> (+%d, -%d)\n",
-				teamURL(report.GitHubTeam),
-				report.GitHubTeam,
-				len(report.MembersAdded),
-				len(report.MembersRemoved))
+	for _, list := range []struct {
+		heading string
+		lines   []string
+	}{
+		{"*Teams With Changes*", changed},
+		{"*Teams With No Changes*", unchanged},
+		{"*Errors*", errs},
+		{"*Skipped: Not Organization Members*", skippedExternal},
+		{"*Skipped: No GitHub Username In Okta*", skippedNoUsername},
+	} {
+		if len(list.lines) > 0 {
+			blocks = append(blocks, slack.NewDividerBlock())
+			blocks = append(blocks, listSections(list.heading, list.lines)...)
 		}
-
-		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", changesText, false, false),
-			nil, nil,
-		))
 	}
 
-	// list of rules without changes
-	if len(rulesWithoutChanges) > 0 {
-		blocks = append(blocks, slack.NewDividerBlock())
-
-		noChangesText := "*Rules With No Changes*\n"
-		for _, report := range rulesWithoutChanges {
-			noChangesText += fmt.Sprintf("- <%s|%s>\n", teamURL(report.GitHubTeam), report.GitHubTeam)
-		}
-
-		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", noChangesText, false, false),
-			nil, nil,
-		))
-	}
-
-	// errors section
-	if len(allErrors) > 0 {
-		blocks = append(blocks, slack.NewDividerBlock())
-
-		errorsText := "*Errors*\n"
-		for _, err := range allErrors {
-			errorsText += fmt.Sprintf("- %s\n", err)
-		}
-
-		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", errorsText, false, false),
-			nil, nil,
-		))
-	}
-
-	// skipped members section
-	if len(allSkippedExternal) > 0 || len(allSkippedNoGHUsername) > 0 {
-		blocks = append(blocks, slack.NewDividerBlock())
-
-		skippedText := "*Skipped Members*\n"
-
-		if len(allSkippedExternal) > 0 {
-			skippedText += "_External Collaborators_\n"
-			for _, member := range allSkippedExternal {
-				skippedText += fmt.Sprintf("- %s\n", member)
-			}
-		}
-
-		if len(allSkippedNoGHUsername) > 0 {
-			if len(allSkippedExternal) > 0 {
-				skippedText += "\n"
-			}
-			skippedText += "_No GitHub Username In Okta:_\n"
-			for _, member := range allSkippedNoGHUsername {
-				skippedText += fmt.Sprintf("- %s\n", member)
-			}
-		}
-
-		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", skippedText, false, false),
-			nil, nil,
-		))
-	}
-
-	channel := s.channelFor(s.channels.OktaSync)
-	_, _, err := s.client.PostMessageContext(
-		ctx,
-		channel,
-		slack.MsgOptionBlocks(blocks...),
-		slack.MsgOptionText(fmt.Sprintf("okta sync: %d rules, +%d/-%d members", len(reports), totalAdded, totalRemoved), false),
-	)
-
+	err := s.post(ctx, s.channelFor(s.channels.OktaSync),
+		fmt.Sprintf("Okta sync: %d teams, +%d/-%d members, %d errors", len(reports), totalAdded, totalRemoved, len(errs)), blocks)
 	if err != nil {
-		return errors.Wrap(err, "failed to post okta sync notification to slack")
+		return fmt.Errorf("failed to post okta sync notification to slack: %w", err)
 	}
-
 	return nil
+}
+
+// teamLink returns a mrkdwn link to a team.
+func (s *SlackNotifier) teamLink(org, slug string) string {
+	if slug == "" {
+		return "_unknown team_"
+	}
+	return link(fmt.Sprintf("%s/orgs/%s/teams/%s", s.githubWebURL, org, slug), slug)
 }
 
 // NotifyOrphanedUsers sends a Slack notification about organization members
@@ -243,180 +141,80 @@ func (s *SlackNotifier) NotifyOrphanedUsers(ctx context.Context, report *domain.
 		return nil
 	}
 
+	users := slices.Clone(report.OrphanedUsers)
+	slices.SortFunc(users, func(a, b string) int { return strings.Compare(strings.ToLower(a), strings.ToLower(b)) })
+	lines := make([]string, 0, len(users))
+	for _, user := range users {
+		lines = append(lines, "• `"+escape(user)+"`")
+	}
+
 	blocks := []slack.Block{
-		slack.NewHeaderBlock(
-			slack.NewTextBlockObject("plain_text", "⚠️ Orphaned GitHub Users Detected", false, false),
-		),
-		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf("Found *%d* organization member(s) not in any Okta-synced GitHub teams:", len(report.OrphanedUsers)),
-				false, false),
-			nil, nil,
-		),
+		slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, "⚠️ Orphaned GitHub Users Detected", false, false)),
+		section(fmt.Sprintf("Found *%d* organization member(s) not in any Okta-synced GitHub team:", len(users))),
 	}
+	blocks = append(blocks, listSections("", lines)...)
+	blocks = append(blocks, slack.NewContextBlock("context",
+		mrkdwn("_These users may need to be added to Okta groups or removed from the organization._")))
 
-	userList := ""
-	for _, user := range report.OrphanedUsers {
-		userList += fmt.Sprintf("• `%s`\n", user)
-	}
-
-	blocks = append(blocks, slack.NewSectionBlock(
-		slack.NewTextBlockObject("mrkdwn", userList, false, false),
-		nil, nil,
-	))
-
-	blocks = append(blocks, slack.NewContextBlock(
-		"context",
-		slack.NewTextBlockObject("mrkdwn", "_These users may need to be added to Okta groups or removed from the organization._", false, false),
-	))
-
-	channel := s.channelFor(s.channels.OrphanedUsers)
-	_, _, err := s.client.PostMessageContext(
-		ctx,
-		channel,
-		slack.MsgOptionBlocks(blocks...),
-		slack.MsgOptionText(fmt.Sprintf("orphaned github users detected: %d users", len(report.OrphanedUsers)), false),
-	)
-
+	err := s.post(ctx, s.channelFor(s.channels.OrphanedUsers),
+		fmt.Sprintf("Orphaned GitHub users detected: %d users", len(users)), blocks)
 	if err != nil {
-		return errors.Wrap(err, "failed to post orphaned users notification to slack")
+		return fmt.Errorf("failed to post orphaned users notification to slack: %w", err)
 	}
-
 	return nil
 }
 
-// maxReposInNotification limits the number of repositories shown in a
-// single Slack message to avoid exceeding block limits.
-const maxReposInNotification = 15
-
-// NotifySecurityAlerts sends a Slack notification summarizing open
+// NotifySecurityAlerts sends a Slack notification summarizing stale open
 // security alerts across the organization.
 func (s *SlackNotifier) NotifySecurityAlerts(ctx context.Context, report *domain.SecurityAlertsReport, githubOrg string) error {
-	if report == nil || !report.HasAlerts() {
+	if report == nil || (!report.HasAlerts() && !report.HasErrors()) {
 		return nil
 	}
 
 	blocks := []slack.Block{
-		slack.NewHeaderBlock(
-			slack.NewTextBlockObject("plain_text",
-				"Security Alerts Report", false, false),
-		),
-		slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn",
-				fmt.Sprintf(
-					"*%d* open alert(s) across *%d* repository(s) in `%s`",
-					report.TotalAlerts,
-					report.RepoCount(),
-					githubOrg,
-				),
-				false, false),
-			nil, nil,
-		),
+		slack.NewHeaderBlock(slack.NewTextBlockObject(slack.PlainTextType, "Security Alerts Report", false, false)),
+		section(fmt.Sprintf("*%d* open alert(s) across *%d* repository(s) in `%s`",
+			report.TotalAlerts, report.RepoCount(), escape(githubOrg))),
 	}
 
-	// repo list sorted by most alerts first
 	repos := sortedReposByAlertCount(report.AlertsByRepo)
-
-	repoLines := ""
-	for i, repo := range repos {
-		if i >= maxReposInNotification {
-			repoLines += fmt.Sprintf(
-				"\n_…and %d more_", len(repos)-i)
-			break
-		}
-
+	lines := make([]string, 0, len(repos))
+	for _, repo := range repos {
 		alerts := report.AlertsByRepo[repo]
-		highest := highestSeverity(alerts)
-		secURL := fmt.Sprintf(
-			"https://github.com/%s/security", repo)
-
-		repoLines += fmt.Sprintf("• <%s|%s> — %d alert(s), %s severity\n",
-			secURL, repo, len(alerts), highest)
+		lines = append(lines, fmt.Sprintf("• %s — %d alert(s), %s severity",
+			link(fmt.Sprintf("%s/%s/security", s.githubWebURL, repo), repo), len(alerts), domain.HighestSeverity(alerts)))
 	}
+	blocks = append(blocks, listSections("", lines)...)
 
-	blocks = append(blocks, slack.NewSectionBlock(
-		slack.NewTextBlockObject("mrkdwn", repoLines, false, false),
-		nil, nil,
-	))
-
-	if report.HasErrors() {
-		errText := "*Errors:*\n"
-		for _, e := range report.Errors {
-			errText += fmt.Sprintf("• %s\n", e)
-		}
-		blocks = append(blocks, slack.NewSectionBlock(
-			slack.NewTextBlockObject("mrkdwn", errText,
-				false, false),
-			nil, nil,
-		))
+	errs := make([]string, 0, len(report.Errors))
+	for _, e := range report.Errors {
+		errs = append(errs, "• "+escape(e))
 	}
+	blocks = append(blocks, listSections("*Errors:*", errs)...)
 
-	blocks = append(blocks, slack.NewContextBlock("",
-		slack.NewTextBlockObject("mrkdwn",
-			fmt.Sprintf(
-				"Filtered to open alerts older than %d days · severity %s or above",
-				report.MinAgeDays,
-				report.MinSeverity,
-			),
-			false, false),
-	))
+	blocks = append(blocks, slack.NewContextBlock("context", mrkdwn(fmt.Sprintf(
+		"Open alerts older than %d days with severity %s or above", report.MinAgeDays, escape(report.MinSeverity)))))
 
-	channel := s.channelFor(s.channels.SecurityAlerts)
-	_, _, err := s.client.PostMessageContext(
-		ctx,
-		channel,
-		slack.MsgOptionBlocks(blocks...),
-		slack.MsgOptionText(
-			fmt.Sprintf("security alerts: %d open alerts across %d repos in %s",
-				report.TotalAlerts, report.RepoCount(), githubOrg),
-			false),
-	)
-
+	err := s.post(ctx, s.channelFor(s.channels.SecurityAlerts),
+		fmt.Sprintf("Security alerts: %d open alerts across %d repos in %s", report.TotalAlerts, report.RepoCount(), githubOrg), blocks)
 	if err != nil {
-		return errors.Wrap(err,
-			"failed to post security alerts notification to slack")
+		return fmt.Errorf("failed to post security alerts notification to slack: %w", err)
 	}
-
 	return nil
 }
 
-// sortedReposByAlertCount returns repo names sorted by descending
-// alert count, with alphabetical tiebreak.
+// sortedReposByAlertCount returns repo names sorted by descending alert
+// count, then by name.
 func sortedReposByAlertCount(alertsByRepo map[string][]domain.SecurityAlert) []string {
 	repos := make([]string, 0, len(alertsByRepo))
 	for repo := range alertsByRepo {
 		repos = append(repos, repo)
 	}
-	sort.Slice(repos, func(i, j int) bool {
-		ci := len(alertsByRepo[repos[i]])
-		cj := len(alertsByRepo[repos[j]])
-		if ci != cj {
-			return ci > cj
+	slices.SortFunc(repos, func(a, b string) int {
+		if d := len(alertsByRepo[b]) - len(alertsByRepo[a]); d != 0 {
+			return d
 		}
-		return repos[i] < repos[j]
+		return strings.Compare(a, b)
 	})
 	return repos
-}
-
-// highestSeverity returns the highest severity label among alerts.
-func highestSeverity(alerts []domain.SecurityAlert) string {
-	best := 0
-	for _, a := range alerts {
-		if r := severityRank[a.Severity]; r > best {
-			best = r
-		}
-	}
-	for _, sev := range []string{"critical", "high", "medium", "low"} {
-		if severityRank[sev] == best {
-			return sev
-		}
-	}
-	return "unknown"
-}
-
-var severityRank = map[string]int{
-	"critical": 4,
-	"high":     3,
-	"medium":   2,
-	"low":      1,
 }

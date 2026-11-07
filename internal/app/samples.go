@@ -3,12 +3,13 @@ package app
 import (
 	"time"
 
+	gh "github.com/google/go-github/v93/github"
+
 	"github.com/cruxstack/github-ops-app/internal/domain"
-	gh "github.com/google/go-github/v79/github"
 )
 
-// fakePRComplianceResult returns sample PR compliance data for testing.
-func fakePRComplianceResult() *domain.PRComplianceResult {
+// samplePRComplianceResult returns sample data for the slack-test action.
+func samplePRComplianceResult() *domain.PRComplianceResult {
 	prNumber := 42
 	prTitle := "Add new authentication feature"
 	prURL := "https://github.com/acme-corp/demo-repo/pull/42"
@@ -33,8 +34,8 @@ func fakePRComplianceResult() *domain.PRComplianceResult {
 	}
 }
 
-// fakeOktaSyncReports returns sample Okta sync reports for testing.
-func fakeOktaSyncReports() []*domain.SyncReport {
+// sampleOktaSyncReports returns sample data for the slack-test action.
+func sampleOktaSyncReports() []*domain.SyncReport {
 	return []*domain.SyncReport{
 		{
 			Rule:           "engineering-team",
@@ -61,16 +62,15 @@ func fakeOktaSyncReports() []*domain.SyncReport {
 	}
 }
 
-// fakeOrphanedUsersReport returns sample orphaned users data for testing.
-func fakeOrphanedUsersReport() *domain.OrphanedUsersReport {
+// sampleOrphanedUsersReport returns sample data for the slack-test action.
+func sampleOrphanedUsersReport() *domain.OrphanedUsersReport {
 	return &domain.OrphanedUsersReport{
 		OrphanedUsers: []string{"orphan-user-1", "orphan-user-2", "legacy-bot"},
 	}
 }
 
-// fakeSecurityAlertsReport returns sample security alerts data for
-// testing.
-func fakeSecurityAlertsReport() *domain.SecurityAlertsReport {
+// sampleSecurityAlertsReport returns sample data for the slack-test action.
+func sampleSecurityAlertsReport() *domain.SecurityAlertsReport {
 	now := time.Now()
 	return &domain.SecurityAlertsReport{
 		MinAgeDays:  30,

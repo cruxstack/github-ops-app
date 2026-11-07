@@ -1,94 +1,197 @@
-// Package app provides the core application logic for the GitHub bot.
-// Coordinates webhook processing, Okta sync, and PR compliance checks.
+// Package app is the application: it builds the GitHub, Okta, and Slack
+// clients from the configuration, serves the webhook, admin, and scheduled
+// endpoints, and runs the Okta sync, PR compliance, and security alert
+// features.
 package app
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/cruxstack/github-ops-app/internal/config"
 	"github.com/cruxstack/github-ops-app/internal/domain"
+	ghclient "github.com/cruxstack/github-ops-app/internal/github/client"
+	"github.com/cruxstack/github-ops-app/internal/notifiers"
+	"github.com/cruxstack/github-ops-app/internal/okta"
 )
 
-// App is the main application instance containing all clients and
-// configuration. depends on domain interfaces, not concrete implementations.
+// Scheduled actions.
+const (
+	ActionOktaSync       = "okta-sync"
+	ActionSecurityAlerts = "security-alerts"
+	ActionSlackTest      = "slack-test"
+)
+
+// JobTimeout bounds a sync or report, and a queued follow-up sync.
+const JobTimeout = 10 * time.Minute
+
+// Background runs work after the response to a request is sent, with a
+// context of its own.
+type Background interface {
+	Go(f func(ctx context.Context))
+}
+
+// Option replaces a dependency that New would otherwise build.
+type Option func(*deps)
+
+type deps struct {
+	httpClient *http.Client
+	github     domain.GitHubClient
+	okta       domain.OktaClient
+	notifier   domain.Notifier
+	background Background
+}
+
+// WithBackground runs webhook-triggered syncs in the background, so the
+// webhook is answered at once. Without it they run before responding, as
+// Lambda requires.
+func WithBackground(b Background) Option {
+	return func(d *deps) { d.background = b }
+}
+
+// WithHTTPClient sets the HTTP client every API client sends requests with.
+func WithHTTPClient(c *http.Client) Option {
+	return func(d *deps) { d.httpClient = c }
+}
+
+// WithGitHubClient replaces the GitHub client.
+func WithGitHubClient(c domain.GitHubClient) Option {
+	return func(d *deps) { d.github = c }
+}
+
+// WithOktaClient replaces the Okta client.
+func WithOktaClient(c domain.OktaClient) Option {
+	return func(d *deps) { d.okta = c }
+}
+
+// WithNotifier replaces the Slack notifier.
+func WithNotifier(n domain.Notifier) Option {
+	return func(d *deps) { d.notifier = n }
+}
+
+// App is the configured application. It is safe for concurrent use.
 type App struct {
-	Config       *config.Config
-	Logger       *slog.Logger
-	GitHubClient domain.GitHubClient
-	OktaClient   domain.OktaClient
-	Notifier     domain.Notifier
-	router       http.Handler
-	routerOnce   sync.Once
+	cfg      *config.Config
+	logger   *slog.Logger
+	github   domain.GitHubClient
+	okta     domain.OktaClient // nil when okta sync is not configured
+	notifier domain.Notifier   // nil when slack is not configured
+	// background runs webhook-triggered syncs; nil runs them inline
+	background Background
+	handler    http.Handler
+
+	// syncMu guards syncRunning and syncPending, which coalesce okta syncs
+	// requested while one is running into a single follow-up sync, and
+	// managedTeams, the slugs the last complete sync managed (nil before
+	// one).
+	syncMu       sync.Mutex
+	syncRunning  bool
+	syncPending  bool
+	managedTeams map[string]bool
 }
 
-// ScheduledEvent represents a generic scheduled event.
-type ScheduledEvent struct {
-	Action string          `json:"action"`
-	Data   json.RawMessage `json:"data,omitempty"`
+// New builds the application. It makes no network calls, so it fails only
+// on invalid configuration.
+func New(cfg *config.Config, logger *slog.Logger, opts ...Option) (*App, error) {
+	if cfg == nil {
+		return nil, errors.New("config is required")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
+	var d deps
+	for _, opt := range opts {
+		opt(&d)
+	}
+
+	a := &App{cfg: cfg, logger: logger, github: d.github, okta: d.okta, notifier: d.notifier, background: d.background}
+
+	if a.github == nil {
+		gh, err := ghclient.New(ghclient.Options{
+			AppID:          cfg.GitHub.AppID,
+			InstallationID: cfg.GitHub.InstallationID,
+			PrivateKey:     cfg.GitHub.PrivateKey,
+			Org:            cfg.GitHub.Org,
+			BaseURL:        cfg.GitHub.BaseURL,
+			HTTPClient:     d.httpClient,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create github client: %w", err)
+		}
+		a.github = gh
+	}
+
+	if a.okta == nil && cfg.Okta.Enabled {
+		oc, err := okta.New(okta.Options{
+			Domain:          cfg.Okta.Domain,
+			ClientID:        cfg.Okta.ClientID,
+			PrivateKey:      cfg.Okta.PrivateKey,
+			PrivateKeyID:    cfg.Okta.PrivateKeyID,
+			Scopes:          cfg.Okta.Scopes,
+			GitHubUserField: cfg.Okta.GitHubUserField,
+			BaseURL:         cfg.Okta.BaseURL,
+			HTTPClient:      d.httpClient,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create okta client: %w", err)
+		}
+		a.okta = oc
+	}
+
+	if a.notifier == nil && cfg.Slack.Enabled {
+		a.notifier = notifiers.New(notifiers.Options{
+			Token: cfg.Slack.Token,
+			Channels: notifiers.SlackChannels{
+				Default:        cfg.Slack.Channel,
+				PRBypass:       cfg.Slack.ChannelPRBypass,
+				OktaSync:       cfg.Slack.ChannelOktaSync,
+				OrphanedUsers:  cfg.Slack.ChannelOrphanedUsers,
+				SecurityAlerts: cfg.Slack.ChannelSecurityAlerts,
+			},
+			Messages:     notifiers.SlackMessages{PRBypassFooterNote: cfg.Slack.PRBypassFooterNote},
+			APIURL:       cfg.Slack.APIURL,
+			GitHubWebURL: cfg.GitHub.WebURL,
+			HTTPClient:   d.httpClient,
+		})
+	}
+
+	a.handler = a.newRouter()
+	return a, nil
 }
 
-// processScheduledEvent handles scheduled events (e.g., cron jobs).
-// routes to appropriate handlers based on event action.
-func (a *App) processScheduledEvent(ctx context.Context, evt ScheduledEvent) error {
-	if a.Config.DebugEnabled {
-		j, _ := json.Marshal(evt)
-		a.Logger.Debug("received scheduled event", slog.String("event", string(j)))
-	}
-
-	switch evt.Action {
-	case "okta-sync":
-		return a.handleOktaSync(ctx)
-	case "security-alerts":
-		return a.handleSecurityAlerts(ctx)
-	case "slack-test":
-		return a.handleSlackTest(ctx)
-	default:
-		return errors.Newf("unknown scheduled action: %s", evt.Action)
-	}
+// Config returns the application's configuration.
+func (a *App) Config() *config.Config {
+	return a.cfg
 }
 
-// processWebhook handles incoming GitHub webhook events.
-// supports pull_request, team, and membership events.
-func (a *App) processWebhook(ctx context.Context, payload []byte, eventType string) error {
-	if a.Config.DebugEnabled {
-		a.Logger.Debug("received webhook", slog.String("event_type", eventType))
-	}
-
-	switch eventType {
-	case "pull_request":
-		return a.handlePullRequestWebhook(ctx, payload)
-	case "team":
-		return a.handleTeamWebhook(ctx, payload)
-	case "membership":
-		return a.handleMembershipWebhook(ctx, payload)
-	default:
-		return errors.Wrapf(domain.ErrInvalidEventType, "%s", eventType)
-	}
+// Handler returns the application's HTTP handler.
+func (a *App) Handler() http.Handler {
+	return a.handler
 }
 
-// StatusResponse contains application status and feature flags.
-type StatusResponse struct {
+// Status describes the application and its enabled features.
+type Status struct {
 	Status                string `json:"status"`
-	GitHubConfigured      bool   `json:"github_configured"`
+	GitHubOrg             string `json:"github_org"`
 	OktaSyncEnabled       bool   `json:"okta_sync_enabled"`
-	PRComplianceCheck     bool   `json:"pr_compliance_check"`
+	PRComplianceEnabled   bool   `json:"pr_compliance_enabled"`
 	SecurityAlertsEnabled bool   `json:"security_alerts_enabled"`
 	SlackEnabled          bool   `json:"slack_enabled"`
 }
 
-// GetStatus returns current application status and enabled features.
-func (a *App) GetStatus() StatusResponse {
-	return StatusResponse{
+// Status returns the application's status.
+func (a *App) Status() Status {
+	return Status{
 		Status:                "ok",
-		GitHubConfigured:      a.Config.IsGitHubConfigured(),
-		OktaSyncEnabled:       a.Config.IsOktaSyncEnabled(),
-		PRComplianceCheck:     a.Config.IsPRComplianceEnabled(),
-		SecurityAlertsEnabled: a.Config.IsSecurityAlertsEnabled(),
-		SlackEnabled:          a.Config.SlackEnabled,
+		GitHubOrg:             a.cfg.GitHub.Org,
+		OktaSyncEnabled:       a.okta != nil,
+		PRComplianceEnabled:   a.cfg.PRCompliance.Enabled,
+		SecurityAlertsEnabled: a.cfg.SecurityAlerts.Enabled,
+		SlackEnabled:          a.notifier != nil,
 	}
 }

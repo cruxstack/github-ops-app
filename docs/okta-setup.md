@@ -141,7 +141,17 @@ profile field contains GitHub usernames:
    - Description: `User's GitHub username for team sync`
 5. Click **Save**
 
-Then set `APP_OKTA_GITHUB_USER_FIELD=githubUsername`.
+Then set `APP_OKTA_GITHUB_USER_FIELD=githubUsername`. Standard attributes,
+such as `nickName`, work too.
+
+> **Security**: the sync adds whoever the attribute names to the user's teams,
+> and GitHub invites them to the organization if they aren't a member. Make
+> the attribute **read only** for users (in the Profile Editor, under the
+> attribute's **User permission**), and fill it from a trusted source, so no
+> one can point it at another GitHub account.
+
+Values are trimmed, and a leading `@` is removed. A value that isn't a valid
+GitHub username is skipped and reported, with the user's email.
 
 ## Step 9: Prepare Okta Groups
 
@@ -180,6 +190,9 @@ APP_OKTA_PRIVATE_KEY_PATH=/path/to/okta-private-key.pem
 
 # Or use AWS SSM parameter
 APP_OKTA_PRIVATE_KEY=arn:aws:ssm:us-east-1:123456789:parameter/github-bot/okta-key
+
+# Key ID (kid) of the public key, if you registered more than one
+APP_OKTA_PRIVATE_KEY_ID=your-key-id
 ```
 
 ## Step 11: Configure Sync Rules
@@ -202,39 +215,45 @@ APP_OKTA_SYNC_RULES='[
 
 ### Rule Fields
 
-| Field                    | Description                                            |
-| ------------------------ | ------------------------------------------------------ |
-| `name`                   | Rule identifier (for logging)                          |
-| `enabled`                | Enable/disable rule (default: `true`)                  |
-| `okta_group_pattern`     | Regex to match Okta groups                             |
-| `okta_group_name`        | Exact Okta group name (alternative to pattern)         |
-| `github_team_prefix`     | Prefix for generated GitHub team names                 |
-| `github_team_name`       | Exact GitHub team name (overrides pattern)             |
-| `strip_prefix`           | Remove this prefix from Okta group name                |
-| `sync_members`           | Sync members between Okta and GitHub (default: `true`) |
-| `create_team_if_missing` | Auto-create GitHub teams if they don't exist           |
-| `team_privacy`           | GitHub team visibility: `secret` or `closed`           |
+| Field                    | Description                                             |
+| ------------------------ | ------------------------------------------------------- |
+| `name`                   | Rule identifier (for logging)                           |
+| `enabled`                | Enable/disable rule (default: `true`)                   |
+| `okta_group_pattern`     | Regex to match Okta groups                              |
+| `okta_group_name`        | Exact Okta group name (alternative to pattern)          |
+| `github_team_prefix`     | Prefix for generated GitHub team names                  |
+| `github_team_name`       | Exact GitHub team name, for `okta_group_name` rules     |
+| `strip_prefix`           | Remove this prefix from Okta group name                 |
+| `sync_members`           | Sync members between Okta and GitHub (default: `true`)  |
+| `create_team_if_missing` | Create missing GitHub teams (default: `false`)          |
+| `team_privacy`           | Created teams' visibility: `closed` (default), `secret` |
+
+A rule sets exactly one of `okta_group_pattern` and `okta_group_name`.
+`github_team_name` can't be combined with a pattern, since every matched group
+would sync into one team. Names derived from a pattern are lowercased, with
+other characters replaced by hyphens. A team is found by name even when its
+slug differs, such as `Platform Team` and `platform-team`.
+
+When `create_team_if_missing` is `false`, a missing team is reported as an
+error and its group is skipped. Unknown fields are rejected, so a typo is an
+error at startup instead of being ignored.
 
 See the [main README](../README.md#okta-sync-rules) for additional examples.
 
 ## Verification
 
-Test your Okta configuration:
+The service authenticates with Okta on the first sync. Trigger one and check
+the result:
 
 ```bash
-# Test OAuth token retrieval (manual verification)
-# The app will automatically authenticate on startup
-
-# Check app logs for:
-# - "okta client initialized"
-# - No authentication errors during sync
+curl -X POST -H "Authorization: Bearer $APP_ADMIN_TOKEN" \
+  https://github-ops.example.com/scheduled/okta-sync
 ```
 
-Trigger a sync and verify:
-
-1. POST to `/scheduled/okta-sync` endpoint
-2. Check logs for groups discovered and teams synced
-3. Verify GitHub team memberships match Okta groups
+1. The logs show an `okta group synced` line per group, with the members added
+   and removed, and any errors.
+2. The Slack report, if configured, lists the same.
+3. GitHub team memberships match the Okta groups.
 
 ## Troubleshooting
 
@@ -255,14 +274,20 @@ Trigger a sync and verify:
 - Verify `okta.users.read` scope is granted
 - Check `APP_OKTA_GITHUB_USER_FIELD` points to a valid profile field
 - Ensure users have the GitHub username field populated
-- Only `ACTIVE` users are synced - suspended users are skipped
+- Only users who can sign in are synced: `ACTIVE`, `PASSWORD_EXPIRED`,
+  `LOCKED_OUT`, and `RECOVERY`. `STAGED`, `PROVISIONED`, `SUSPENDED`, and
+  `DEPROVISIONED` users are not, and are removed from their teams.
+- No one is removed from a team when more than
+  `APP_OKTA_SYNC_SAFETY_THRESHOLD` of its members would be; the report says
+  so.
 
 ### Rate limiting
 
 Okta has API rate limits. If you hit limits:
 
 - Reduce sync frequency
-- The app handles rate limit responses gracefully
+- Rate-limited requests are retried up to 3 times, after the reset time Okta
+  returns, waiting at most 30 seconds
 
 ### Permission denied errors
 

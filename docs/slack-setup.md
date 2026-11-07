@@ -44,8 +44,9 @@ If you used the manifest, scopes are pre-configured. Otherwise:
    | ------------------- | ------------------------------------------ |
    | `chat:write`        | Post messages to channels bot is member of |
    | `chat:write.public` | Post to public channels without joining    |
-   | `channels:read`     | View basic channel info                    |
-   | `channels:join`     | Join public channels                       |
+
+   The app only posts messages, so it needs no other scopes. Leave out
+   `chat:write.public` to limit it to channels it is invited to.
 
 ## Step 3: Install to Workspace
 
@@ -164,17 +165,27 @@ Expected response:
 }
 ```
 
+Then send a sample of every notification from the running service:
+
+```bash
+curl -X POST -H "Authorization: Bearer $APP_ADMIN_TOKEN" \
+  https://github-ops.example.com/scheduled/slack-test
+```
+
 ## Notification Types
 
 The bot sends these notification types:
 
-| Event                  | Description                           |
-| ---------------------- | ------------------------------------- |
-| PR Compliance Alert    | PR merged bypassing branch protection |
-| Okta Sync Report       | Summary of team membership changes    |
-| Orphaned Users Alert   | Org members not in any synced teams   |
-| Security Alerts Report | Stale security alerts across the org  |
-| Sync Error             | Errors during Okta sync process       |
+| Event                  | Description                                         |
+| ---------------------- | --------------------------------------------------- |
+| PR Compliance Alert    | PR merged without meeting its branch's requirements |
+| Okta Sync Report       | Team membership changes, errors, and skipped users  |
+| Orphaned Users Alert   | Org members not in any synced teams                 |
+| Security Alerts Report | Stale security alerts, and sources that failed      |
+
+Text from GitHub and Okta, such as PR titles and group names, is escaped, so
+it can't mention channels or add links. Long reports are cut to fit Slack's
+message limits; the logs have the full report.
 
 ## Troubleshooting
 
@@ -210,11 +221,9 @@ The bot sends these notification types:
 
 ### Rate limiting
 
-Slack has rate limits (typically 1 message per second per channel). The app
-handles rate limits gracefully, but if you see delays:
-
-- Notifications are queued and retried
-- Consider consolidating notifications for high-volume events
+Slack allows about one message per second per channel. The app posts one
+message per report, so it rarely reaches the limit; a rate-limited message is
+logged as a failure and not retried.
 
 ## Security Considerations
 

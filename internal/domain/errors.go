@@ -1,43 +1,44 @@
-// Package domain defines shared business types, errors, and interfaces.
-// this package has zero internal imports and serves as the dependency
-// inversion layer for the application.
+// Package domain defines the types, interfaces, and errors shared by the
+// rest of the application. It imports no other internal package.
 package domain
 
-import "github.com/cockroachdb/errors"
+import "errors"
 
-// error domain markers enable error classification and monitoring by type
-// rather than comparing specific sentinel errors.
-type (
-	validationError struct{}
-	authError       struct{}
-	apiError        struct{}
-	configError     struct{}
+// Error kinds classify failures so callers, such as the HTTP layer, can react
+// to a kind of failure without knowing every specific error. Check them with
+// errors.Is.
+var (
+	ErrValidation = errors.New("validation error")
+	ErrAuth       = errors.New("auth error")
+	ErrAPI        = errors.New("api error")
+	ErrConfig     = errors.New("config error")
 )
 
-func (validationError) Error() string { return "validation error" }
-func (authError) Error() string       { return "auth error" }
-func (apiError) Error() string        { return "api error" }
-func (configError) Error() string     { return "config error" }
+// kindError is a sentinel error that belongs to one of the error kinds, so
+// errors.Is matches both the sentinel and its kind.
+type kindError struct {
+	kind error
+	msg  string
+}
 
-// domain type instances for error marking
-var (
-	ValidationError = validationError{}
-	AuthError       = authError{}
-	APIError        = apiError{}
-	ConfigError     = configError{}
-)
+func (e *kindError) Error() string { return e.msg }
+func (e *kindError) Unwrap() error { return e.kind }
 
-// sentinel errors for common failure cases
+func newKindError(kind error, msg string) error {
+	return &kindError{kind: kind, msg: msg}
+}
+
+// Sentinel errors for common failures.
 var (
-	ErrMissingPRData       = errors.Mark(errors.New("pr data missing"), ValidationError)
-	ErrInvalidSignature    = errors.Mark(errors.New("invalid webhook signature"), AuthError)
-	ErrMissingSignature    = errors.Mark(errors.New("signature missing but secret configured"), AuthError)
-	ErrUnexpectedSignature = errors.Mark(errors.New("signature provided but secret not configured"), AuthError)
-	ErrTeamNotFound        = errors.Mark(errors.New("github team not found"), APIError)
-	ErrGroupNotFound       = errors.Mark(errors.New("okta group not found"), APIError)
-	ErrInvalidPattern      = errors.Mark(errors.New("invalid regex pattern"), ValidationError)
-	ErrEmptyPattern        = errors.Mark(errors.New("pattern cannot be empty"), ValidationError)
-	ErrClientNotInit       = errors.Mark(errors.New("client not initialized"), ConfigError)
-	ErrInvalidEventType    = errors.Mark(errors.New("unknown event type"), ValidationError)
-	ErrMissingOAuthCreds   = errors.Mark(errors.New("must provide either api token or oauth credentials"), ConfigError)
+	ErrMissingPRData       = newKindError(ErrValidation, "pr data missing")
+	ErrInvalidPayload      = newKindError(ErrValidation, "invalid webhook payload")
+	ErrInvalidSignature    = newKindError(ErrAuth, "invalid webhook signature")
+	ErrMissingSignature    = newKindError(ErrAuth, "webhook signature missing")
+	ErrInvalidPattern      = newKindError(ErrValidation, "invalid regex pattern")
+	ErrEmptyPattern        = newKindError(ErrValidation, "pattern cannot be empty")
+	ErrUnknownAction       = newKindError(ErrValidation, "unknown scheduled action")
+	ErrFeatureDisabled     = newKindError(ErrConfig, "feature not enabled")
+	ErrGroupNotFound       = newKindError(ErrAPI, "okta group not found")
+	ErrTeamNotFound        = newKindError(ErrAPI, "github team not found")
+	ErrInstallationMissing = newKindError(ErrConfig, "github app is not installed on the organization")
 )

@@ -1,11 +1,39 @@
-FROM golang:1.24 AS builder
+# syntax=docker/dockerfile:1
+
+# The builder runs on the build machine's platform and cross-compiles for
+# the target platform, so multi-platform builds need no emulation.
+FROM --platform=$BUILDPLATFORM golang:1.27.3-alpine AS builder
 
 WORKDIR /src
+
 COPY go.mod go.sum ./
 RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /server ./cmd/server
 
-FROM gcr.io/distroless/static-debian12
-COPY --from=builder /server /server
-ENTRYPOINT ["/server"]
+COPY . .
+
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/server ./cmd/server
+
+FROM alpine:3.24
+
+RUN apk add --no-cache ca-certificates \
+    && mkdir -p /data \
+    && chown 65532:65532 /data
+
+WORKDIR /app
+COPY --from=builder /out/server /app/server
+
+# A numeric unprivileged user, so runtimes can verify it isn't root (such as
+# Kubernetes runAsNonRoot, which rejects a user given by name).
+USER 65532:65532
+
+# where the installer saves credentials with STORAGE_MODE=envfile
+ENV STORAGE_DIR=/data/.env
+VOLUME ["/data"]
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/server"]

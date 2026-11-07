@@ -1,50 +1,39 @@
 package domain
 
-import (
-	"context"
+import "context"
 
-	"github.com/google/go-github/v79/github"
-)
-
-// GitHubClient defines the interface for GitHub API operations.
-// implemented by internal/github/client.Client.
+// GitHubClient defines the GitHub API operations the application uses.
+// Implemented by internal/github/client.Client.
 type GitHubClient interface {
-	// CheckPRCompliance verifies if a merged PR met branch protection
-	// requirements.
+	// CheckPRCompliance verifies whether a merged PR met the branch
+	// protection and ruleset requirements of its base branch.
 	CheckPRCompliance(ctx context.Context, owner, repo string, prNumber int) (*PRComplianceResult, error)
 
-	// GetOrCreateTeam fetches an existing team by slug or creates it if
-	// missing.
-	GetOrCreateTeam(ctx context.Context, teamName, privacy string) (*github.Team, error)
+	// ResolveTeam returns the slug of the team with the given name. If the
+	// team does not exist, it is created when create is true, and
+	// ErrTeamNotFound is returned otherwise.
+	ResolveTeam(ctx context.Context, name, privacy string, create bool) (string, error)
 
 	// SyncTeamMembers adds and removes members to match desired state.
 	SyncTeamMembers(ctx context.Context, teamSlug string, desiredMembers []string, safetyThreshold float64) (*TeamSyncResult, error)
 
-	// GetTeamMembers returns GitHub usernames of all team members.
+	// GetTeamMembers returns the logins of all team members.
 	GetTeamMembers(ctx context.Context, teamSlug string) ([]string, error)
 
-	// ListOrgMembers returns all organization members excluding external
-	// collaborators.
+	// ListOrgMembers returns the logins of all organization members.
 	ListOrgMembers(ctx context.Context) ([]string, error)
 
-	// IsExternalCollaborator checks if a user is an outside collaborator
-	// rather than an organization member.
-	IsExternalCollaborator(ctx context.Context, username string) (bool, error)
-
-	// GetAppSlug fetches the GitHub App slug identifier.
+	// GetAppSlug returns the GitHub App's slug.
 	GetAppSlug(ctx context.Context) (string, error)
 
-	// GetOrg returns the GitHub organization name.
-	GetOrg() string
-
-	// ListSecurityAlerts fetches open security alerts across the org
-	// that are older than minAgeDays and at or above minSeverity.
-	// covers dependabot, code scanning, and secret scanning alerts.
+	// ListSecurityAlerts fetches open security alerts across the org that
+	// are older than minAgeDays and at or above minSeverity. It covers
+	// dependabot, code scanning, and secret scanning alerts.
 	ListSecurityAlerts(ctx context.Context, minAgeDays int, minSeverity string) (*SecurityAlertsReport, error)
 }
 
-// OktaClient defines the interface for Okta API operations.
-// implemented by internal/okta.Client.
+// OktaClient defines the Okta API operations the application uses.
+// Implemented by internal/okta.Client.
 type OktaClient interface {
 	// GetGroupsByPattern fetches all Okta groups matching a regex pattern.
 	GetGroupsByPattern(ctx context.Context, pattern string) ([]*GroupInfo, error)
@@ -54,7 +43,7 @@ type OktaClient interface {
 }
 
 // Notifier defines the interface for sending notifications.
-// implemented by internal/notifiers.SlackNotifier.
+// Implemented by internal/notifiers.SlackNotifier.
 type Notifier interface {
 	// NotifyPRBypass sends a notification when branch protection is
 	// bypassed.

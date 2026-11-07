@@ -1,6 +1,6 @@
-// Package client provides a GitHub API client with App authentication.
-// Handles JWT generation, installation token management, PR compliance
-// checking, and team membership synchronization.
+// Package client is the GitHub API client. It authenticates as a GitHub App,
+// checks merged pull requests for compliance, syncs team membership, and
+// lists security alerts.
 package client
 
 import (
@@ -8,258 +8,270 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/google/go-github/v79/github"
-	"golang.org/x/oauth2"
+	"github.com/google/go-github/v93/github"
+
+	"github.com/cruxstack/github-ops-app/internal/domain"
 )
 
-// Client wraps the GitHub API client with App authentication.
-// automatically refreshes installation tokens before expiry.
-// implements domain.GitHubClient.
+const (
+	// jwtLifetime is how long an app JWT is valid. GitHub rejects JWTs that
+	// expire more than 10 minutes after they are issued.
+	jwtLifetime = 9 * time.Minute
+	// jwtClockSkew backdates a JWT's issue time to allow for clock drift.
+	jwtClockSkew = 60 * time.Second
+	// tokenRefreshMargin is how long before expiry a JWT or installation
+	// token is replaced, so no request carries one that expires in flight.
+	tokenRefreshMargin = 5 * time.Minute
+	// defaultTimeout bounds every GitHub API request.
+	defaultTimeout = 30 * time.Second
+)
+
+// Options configures a Client.
+type Options struct {
+	AppID int64
+	// InstallationID is the app's installation on Org. When zero, the
+	// installation is looked up on first use.
+	InstallationID int64
+	// PrivateKey is the app's PEM-encoded RSA private key.
+	PrivateKey []byte
+	Org        string
+	// BaseURL is the API base URL, such as https://ghe.example.com/api/v3
+	// for GitHub Enterprise Server. Empty means https://api.github.com.
+	BaseURL string
+	// HTTPClient is the client requests are sent with. Its transport is
+	// wrapped to add authentication. Defaults to a client with a timeout.
+	HTTPClient *http.Client
+}
+
+// Client is a GitHub API client authenticated as a GitHub App installation.
+// It is safe for concurrent use. Implements domain.GitHubClient.
 type Client struct {
-	client  *github.Client
-	org     string
-	baseURL string
+	org string
+	// gh authenticates as the installation; app authenticates as the app
+	// itself, for the few endpoints that require a JWT.
+	gh  *github.Client
+	app *github.Client
 
-	appID          int64
-	privateKey     *rsa.PrivateKey
-	installationID int64
-
-	tokenMu    sync.RWMutex
-	token      string
-	tokenExpAt time.Time
+	slugMu sync.Mutex
+	slug   string
 }
 
-// NewAppClient creates a GitHub App client with default base URL.
-func NewAppClient(appID, installationID int64, privateKeyPEM []byte, org string) (*Client, error) {
-	return NewAppClientWithBaseURL(appID, installationID, privateKeyPEM, org, "")
-}
+var _ domain.GitHubClient = (*Client)(nil)
 
-// NewAppClientWithBaseURL creates a GitHub App client with custom base URL.
-// supports GitHub Enterprise Server instances.
-func NewAppClientWithBaseURL(appID, installationID int64, privateKeyPEM []byte, org, baseURL string) (*Client, error) {
-	privateKey, err := parsePrivateKey(privateKeyPEM)
+// New creates a Client. It makes no API calls: credentials are exchanged for
+// an installation token on first use and refreshed before they expire.
+func New(opts Options) (*Client, error) {
+	if opts.AppID <= 0 {
+		return nil, errors.New("github app id is required")
+	}
+	if opts.Org == "" {
+		return nil, errors.New("github org is required")
+	}
+	key, err := ParsePrivateKey(opts.PrivateKey)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse private key")
+		return nil, err
 	}
 
-	c := &Client{
-		org:            org,
-		appID:          appID,
-		privateKey:     privateKey,
-		installationID: installationID,
-		baseURL:        baseURL,
+	httpClient := opts.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: defaultTimeout}
+	}
+	base := httpClient.Transport
+	if base == nil {
+		base = http.DefaultTransport
 	}
 
-	if err := c.refreshToken(context.Background()); err != nil {
-		return nil, errors.Wrap(err, "failed to get initial token")
+	var baseURL *string
+	apiHost := "api.github.com"
+	if opts.BaseURL != "" {
+		u, err := url.Parse(opts.BaseURL)
+		if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") {
+			return nil, fmt.Errorf("invalid github base url %q", opts.BaseURL)
+		}
+		apiHost = u.Host
+		baseURL = &opts.BaseURL
 	}
 
-	return c, nil
+	newGitHubClient := func(rt http.RoundTripper) (*github.Client, error) {
+		hc := *httpClient
+		hc.Transport = rt
+		return github.NewClient(github.WithHTTPClient(&hc), github.WithURLs(baseURL, nil))
+	}
+
+	jwts := &appJWTs{appID: opts.AppID, key: key, now: time.Now}
+	app, err := newGitHubClient(&authTransport{base: base, host: apiHost, token: jwts.Token})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create github app client: %w", err)
+	}
+
+	tokens := &installationTokens{app: app, org: opts.Org, id: opts.InstallationID, now: time.Now}
+	gh, err := newGitHubClient(&authTransport{base: base, host: apiHost, token: tokens.Token})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create github installation client: %w", err)
+	}
+
+	return &Client{org: opts.Org, gh: gh, app: app}, nil
 }
 
-// parsePrivateKey parses RSA private key from PEM format.
-// supports both PKCS1 and PKCS8 formats.
-func parsePrivateKey(privateKeyPEM []byte) (*rsa.PrivateKey, error) {
-	block, _ := pem.Decode(privateKeyPEM)
+// ParsePrivateKey parses a PEM-encoded RSA private key in PKCS#1 or PKCS#8
+// form. Escaped newlines ("\n"), as found in single-line environment
+// variables, are accepted.
+func ParsePrivateKey(privateKeyPEM []byte) (*rsa.PrivateKey, error) {
+	if len(privateKeyPEM) == 0 {
+		return nil, errors.New("github app private key is required")
+	}
+	pemBytes := []byte(strings.ReplaceAll(string(privateKeyPEM), `\n`, "\n"))
+	block, _ := pem.Decode(pemBytes)
 	if block == nil {
-		return nil, errors.New("failed to decode pem block: invalid format")
+		return nil, errors.New("failed to decode github app private key: not pem encoded")
 	}
 
-	key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	parsed, err := x509.ParsePKCS8PrivateKey(block.Bytes)
 	if err != nil {
-		pkcs8Key, err2 := x509.ParsePKCS8PrivateKey(block.Bytes)
-		if err2 != nil {
-			return nil, errors.Wrap(err2, "failed to parse private key as pkcs1 or pkcs8")
-		}
-		rsaKey, ok := pkcs8Key.(*rsa.PrivateKey)
-		if !ok {
-			return nil, errors.New("private key is not rsa format")
-		}
-		return rsaKey, nil
+		return nil, fmt.Errorf("failed to parse github app private key as pkcs1 or pkcs8: %w", err)
 	}
-
+	key, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		return nil, errors.New("github app private key is not an rsa key")
+	}
 	return key, nil
 }
 
-// createJWT generates a JWT token for GitHub App authentication.
-// token is valid for 10 minutes and backdated by 60 seconds for clock skew.
-func (c *Client) createJWT() (string, error) {
-	now := time.Now()
-	claims := jwt.RegisteredClaims{
-		IssuedAt:  jwt.NewNumericDate(now.Add(-60 * time.Second)),
-		ExpiresAt: jwt.NewNumericDate(now.Add(10 * time.Minute)),
-		Issuer:    fmt.Sprintf("%d", c.appID),
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	return token.SignedString(c.privateKey)
+// authTransport adds a bearer token to requests for the GitHub API host, and
+// only that host, so a redirect elsewhere never carries the token.
+type authTransport struct {
+	base  http.RoundTripper
+	host  string
+	token func(ctx context.Context) (string, error)
 }
 
-// refreshToken exchanges JWT for installation token and updates client.
-// installation tokens are valid for 1 hour.
-func (c *Client) refreshToken(ctx context.Context) error {
-	jwtToken, err := c.createJWT()
+func (t *authTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.URL.Host != t.host {
+		return t.base.RoundTrip(req)
+	}
+	token, err := t.token(req.Context())
 	if err != nil {
-		return errors.Wrap(err, "failed to create JWT")
-	}
-
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwtToken})
-	tc := oauth2.NewClient(ctx, ts)
-	appClient := github.NewClient(tc)
-	if c.baseURL != "" {
-		appClient.BaseURL, _ = appClient.BaseURL.Parse(c.baseURL)
-	}
-
-	installToken, resp, err := appClient.Apps.CreateInstallationToken(
-		ctx,
-		c.installationID,
-		&github.InstallationTokenOptions{},
-	)
-	if err != nil {
-		return errors.WithDetailf(
-			errors.Wrap(err, "failed to create installation token"),
-			"installation_id=%d app_id=%d", c.installationID, c.appID,
-		)
-	}
-	defer resp.Body.Close()
-
-	c.tokenMu.Lock()
-	c.token = installToken.GetToken()
-	c.tokenExpAt = installToken.GetExpiresAt().Time
-	ts2 := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: c.token})
-	tc2 := oauth2.NewClient(ctx, ts2)
-	c.client = github.NewClient(tc2)
-	if c.baseURL != "" {
-		c.client.BaseURL, _ = c.client.BaseURL.Parse(c.baseURL)
-	}
-	c.tokenMu.Unlock()
-
-	return nil
-}
-
-// ensureValidToken refreshes the installation token if it expires within 5
-// minutes. uses double-check pattern to avoid redundant refreshes under
-// concurrent access.
-func (c *Client) ensureValidToken(ctx context.Context) error {
-	c.tokenMu.RLock()
-	needsRefresh := time.Now().Add(5 * time.Minute).After(c.tokenExpAt)
-	c.tokenMu.RUnlock()
-
-	if needsRefresh {
-		c.tokenMu.Lock()
-		// double-check after acquiring write lock
-		if time.Now().Add(5 * time.Minute).After(c.tokenExpAt) {
-			c.tokenMu.Unlock()
-			return c.refreshToken(ctx)
+		if req.Body != nil {
+			_ = req.Body.Close()
 		}
-		c.tokenMu.Unlock()
-	}
-
-	return nil
-}
-
-// GetOrg returns the GitHub organization name.
-func (c *Client) GetOrg() string {
-	return c.org
-}
-
-// GetClient returns the underlying go-github client.
-func (c *Client) GetClient() *github.Client {
-	return c.client
-}
-
-// Do executes an HTTP request with authentication.
-// ensures token is valid before executing request.
-func (c *Client) Do(ctx context.Context, req *http.Request) (*http.Response, error) {
-	if err := c.ensureValidToken(ctx); err != nil {
 		return nil, err
 	}
-	req = req.WithContext(ctx)
-	return c.client.Client().Do(req)
+	authed := req.Clone(req.Context())
+	authed.Header.Set("Authorization", "Bearer "+token)
+	return t.base.RoundTrip(authed)
 }
 
-// GetAppSlug fetches the GitHub App slug identifier.
-// used to detect changes made by the app itself.
-// requires JWT authentication (not installation token).
-func (c *Client) GetAppSlug(ctx context.Context) (string, error) {
-	jwtToken, err := c.createJWT()
-	if err != nil {
-		return "", errors.Wrap(err, "failed to create jwt for app slug fetch")
-	}
+// appJWTs signs and caches the JWT that authenticates as the app.
+type appJWTs struct {
+	appID int64
+	key   *rsa.PrivateKey
+	now   func() time.Time
 
-	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: jwtToken})
-	tc := oauth2.NewClient(ctx, ts)
-	appClient := github.NewClient(tc)
-	if c.baseURL != "" {
-		appClient.BaseURL, _ = appClient.BaseURL.Parse(c.baseURL)
-	}
-
-	app, _, err := appClient.Apps.Get(ctx, "")
-	if err != nil {
-		return "", errors.Wrapf(err, "failed to fetch app info for app id %d", c.appID)
-	}
-
-	if app.Slug == nil {
-		return "", errors.Newf("app slug missing for app id %d", c.appID)
-	}
-
-	return *app.Slug, nil
+	mu      sync.Mutex
+	token   string
+	expires time.Time
 }
 
-// IsExternalCollaborator checks if a user is an outside collaborator rather
-// than an organization member. returns true if user is not a full org member.
-func (c *Client) IsExternalCollaborator(ctx context.Context, username string) (bool, error) {
-	if err := c.ensureValidToken(ctx); err != nil {
-		return false, err
+func (j *appJWTs) Token(context.Context) (string, error) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
+	now := j.now()
+	if j.token != "" && now.Add(time.Minute).Before(j.expires) {
+		return j.token, nil
 	}
 
-	membership, resp, err := c.client.Organizations.GetOrgMembership(ctx, username, c.org)
+	expires := now.Add(jwtLifetime)
+	token, err := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.RegisteredClaims{
+		IssuedAt:  jwt.NewNumericDate(now.Add(-jwtClockSkew)),
+		ExpiresAt: jwt.NewNumericDate(expires),
+		Issuer:    strconv.FormatInt(j.appID, 10),
+	}).SignedString(j.key)
 	if err != nil {
-		if resp != nil && resp.StatusCode == 404 {
-			return true, nil
-		}
-		return false, errors.Wrapf(err, "failed to check org membership for user '%s'", username)
+		return "", fmt.Errorf("failed to sign jwt for github app %d: %w", j.appID, err)
 	}
-
-	return membership == nil, nil
+	j.token, j.expires = token, expires
+	return token, nil
 }
 
-// ListOrgMembers returns all organization members excluding external
-// collaborators.
-func (c *Client) ListOrgMembers(ctx context.Context) ([]string, error) {
-	if err := c.ensureValidToken(ctx); err != nil {
-		return nil, err
+// installationTokens exchanges the app JWT for installation tokens and caches
+// them until shortly before they expire. Concurrent callers share a single
+// refresh.
+type installationTokens struct {
+	app *github.Client
+	org string
+	now func() time.Time
+
+	mu      sync.Mutex
+	id      int64
+	token   string
+	expires time.Time
+}
+
+func (s *installationTokens) Token(ctx context.Context) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.token != "" && s.now().Add(tokenRefreshMargin).Before(s.expires) {
+		return s.token, nil
 	}
 
-	opts := &github.ListMembersOptions{
-		ListOptions: github.ListOptions{PerPage: 100},
-	}
-
-	var allMembers []string
-	for {
-		members, resp, err := c.client.Organizations.ListMembers(ctx, c.org, opts)
+	if s.id == 0 {
+		inst, resp, err := s.app.Apps.GetOrganizationInstallation(ctx, s.org)
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to list members for org '%s'", c.org)
-		}
-
-		for _, member := range members {
-			if member.Login != nil {
-				allMembers = append(allMembers, *member.Login)
+			if resp != nil && resp.StatusCode == http.StatusNotFound {
+				return "", fmt.Errorf("failed to find installation for org '%s': %w", s.org, domain.ErrInstallationMissing)
 			}
+			return "", fmt.Errorf("failed to find installation for org '%s': %w", s.org, err)
 		}
-
-		if resp.NextPage == 0 {
-			break
-		}
-		opts.Page = resp.NextPage
+		s.id = inst.GetID()
 	}
 
-	return allMembers, nil
+	token, _, err := s.app.Apps.CreateInstallationToken(ctx, s.id, nil)
+	if err != nil {
+		return "", fmt.Errorf("failed to create token for installation %d: %w", s.id, err)
+	}
+	if token.GetToken() == "" {
+		return "", fmt.Errorf("github returned an empty token for installation %d", s.id)
+	}
+	s.token, s.expires = token.GetToken(), token.GetExpiresAt().Time
+	return s.token, nil
+}
+
+// GetAppSlug returns the GitHub App's slug, used to recognize changes the app
+// made itself. It is fetched once and cached.
+func (c *Client) GetAppSlug(ctx context.Context) (string, error) {
+	c.slugMu.Lock()
+	defer c.slugMu.Unlock()
+	if c.slug != "" {
+		return c.slug, nil
+	}
+
+	app, _, err := c.app.Apps.Get(ctx, "")
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch github app: %w", err)
+	}
+	if app.GetSlug() == "" {
+		return "", errors.New("github app has no slug")
+	}
+	c.slug = app.GetSlug()
+	return c.slug, nil
+}
+
+// isNotFound returns true if resp is a 404 response.
+func isNotFound(resp *github.Response) bool {
+	return resp != nil && resp.StatusCode == http.StatusNotFound
 }

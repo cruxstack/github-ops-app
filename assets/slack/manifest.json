@@ -13,10 +13,8 @@
     "oauth_config": {
         "scopes": {
             "bot": [
-                "channels:join",
-                "channels:read",
-                "chat:write.public",
-                "chat:write"
+                "chat:write",
+                "chat:write.public"
             ]
         }
     },
