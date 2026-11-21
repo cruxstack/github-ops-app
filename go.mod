@@ -4,13 +4,13 @@ go 1.27.4
 
 require (
 	github.com/aws/aws-lambda-go v1.55.1
-	github.com/cruxstack/github-app-setup-go v0.7.1
+	github.com/cruxstack/github-app-setup-go v0.7.2
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-github/v93 v93.0.0
 	github.com/joho/godotenv v1.5.1
 	github.com/okta/okta-sdk-golang/v8 v8.0.0
-	github.com/slack-go/slack v0.35.0
+	github.com/slack-go/slack v0.36.0
 )
 
 require (
